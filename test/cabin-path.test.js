@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   cabinPathPointWorldPosition,
+  CABIN_MARKER_COLORS,
   parseCabinPaths,
   parsePassengerCabin,
   generateCabinMarkerMesh,
@@ -56,6 +57,25 @@ test("generates cabin record markers in renderer coordinates", () => {
   assert.throws(
     () => generateCabinMarkerMesh([[1, 2]]),
     /Invalid cabin marker position/,
+  );
+});
+
+test("cabin marker geometry assigns distinct materials to record kinds", () => {
+  const geometry = generateCabinMarkerMesh([
+    { kind: "passpos", position: [0, 0, 0] },
+    { kind: "stamper", position: [1, 0, 0] },
+    { kind: "ticket_sale", position: [2, 0, 0] },
+    { kind: "ticket_sale_money_point_2", position: [3, 0, 0] },
+    { kind: "ticket_sale_change_point", position: [4, 0, 0] },
+  ]);
+  const materialIndices = Array.from(
+    { length: geometry.triangles.length / 4 },
+    (_, index) => geometry.triangles[index * 4 + 3],
+  );
+  assert.equal(CABIN_MARKER_COLORS.length, 5);
+  assert.deepEqual(
+    materialIndices,
+    [0, 1, 2, 3, 4].flatMap((material) => Array(8).fill(material)),
   );
 });
 
@@ -163,6 +183,7 @@ test("parses cabin path links and generates desktop-width geometry in OMSI coord
     [2, 1, 0, 0, 5, 4, 3, 0],
   );
   assert.equal(geometry.triangles.length, 72);
+  assert.deepEqual(geometry.linkIndices, [0]);
   assert.deepEqual(
     [...geometry.vertices.slice(0, 8)],
     [...new Float32Array([1, 3, 2.1, 0, 1, 0, 0, 0])],
@@ -218,6 +239,7 @@ test("invalid points retain their indices and unusable links are reported", () =
   assert.match(paths.warnings.join("\n"), /invalid numeric/);
   const geometry = generateCabinPathMesh(paths);
   assert.equal(geometry.triangles.length, 104);
+  assert.deepEqual(geometry.linkIndices, [2]);
   assert.match(geometry.warnings.join("\n"), /missing point/);
   assert.match(geometry.warnings.join("\n"), /no horizontal length/);
 });
@@ -338,9 +360,20 @@ test("cabin items and path points are inspectable in the hierarchy", async () =>
   );
   const children = result.hierarchy[0].children;
   const points = children.find((node) => node.type === "cabin-points").children;
+  const links = children.find((node) => node.type === "cabin-links").children;
   const cabin = children.find((node) => node.type === "cabin").children;
+  const pathModelNode = children.find((node) => node.type === "cabin-path");
+  const pathModel = result.models[pathModelNode.modelIndex];
   assert.deepEqual(points[1].info.position, [2, 2, 3]);
   assert.equal(points[1].info.line, 5);
+  assert.equal(pathModel.cabinPathPointMarkerTriangleStart, 2);
+  assert.deepEqual(
+    pathModel.cabinPathPointItems.map((item) => item.index),
+    [0, 1],
+  );
+  assert.equal(pathModel.cabinPathLinkItems[0], links[0].info);
+  assert.deepEqual(pathModel.cabinPathLinkItems, [links[0].info]);
+  assert.equal(pathModel.cabinPathPointItems[0], points[0].info);
   assert.deepEqual(cabin[0].info.position, [2, 2, 3]);
   assert.equal(cabin[1].info.pathPoint, 20);
   assert.deepEqual(cabin[2].info.position, [4, 5, 6]);
@@ -414,6 +447,8 @@ test("indexed cabin records keep their own markers apart from path references", 
   assert.equal(entry.info.pathPoint, 0);
   assert.deepEqual(entry.info.position, [0, 0, 0]);
   assert.equal(entry.info.markerModelIndex, undefined);
+  assert.equal(result.models[markerNode.modelIndex].materials.length, 5);
+  assert.equal(result.models[markerNode.modelIndex].triangles[3], 1);
   assert.deepEqual(
     [...result.models[markerNode.modelIndex].vertices.slice(0, 3)],
     [...new Float32Array([1, 3.075, 2])],

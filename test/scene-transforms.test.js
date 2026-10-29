@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { translateSceneModel } from "../src/scene-transforms.js";
+import {
+  transformSceneModel,
+  translateSceneModel,
+} from "../src/scene-transforms.js";
 import { modelBounds } from "../src/camera-controls.js";
 import { pickModel } from "../src/picking.js";
 import { combineSceneModels, exportWavefront } from "../src/obj-export.js";
@@ -143,4 +146,70 @@ test("invalid and failed translations preserve model data and restore renderer s
   assert.deepEqual(r._modelVisibility, [false]);
   assert.deepEqual(r._target, [0, 0, 0]);
   assert.equal(r._distance, 10);
+});
+
+test("rotation and positive scale affect rendering geometry, picking, and exports", () => {
+  const models = [model()],
+    r = renderer();
+  r.setModels(models);
+  r._target = [0, 0, 0];
+  r._distance = 10;
+  transformSceneModel(
+    r,
+    models,
+    0,
+    [0, 0, 90],
+    [2, 1, 1],
+    [true],
+    [true],
+    0,
+    0,
+  );
+  assert.ok(Math.abs(models[0].vertices[0] + 1) < 1e-5);
+  assert.ok(Math.abs(models[0].vertices[1] - 2) < 1e-5);
+  assert.deepEqual(models[0].sceneTransform.rotation, [0, 0, 90]);
+  assert.deepEqual(models[0].sceneTransform.scale, [2, 1, 1]);
+  assert.equal(
+    pickModel(r, models, 100 + 0.5 / (10 * Math.tan(Math.PI / 6)) * 50, 50),
+    0,
+  );
+  assert.match(exportWavefront(models[0]).obj, /\nv 1 2 0\n/);
+  assert.equal(parseO3D(writeO3D(models[0])).vertices[0], -1);
+});
+
+test("reapplying transforms uses the original geometry and rejects invalid scale", () => {
+  const models = [model()],
+    r = renderer();
+  r.setModels(models);
+  const original = models[0].vertices;
+  const args = [r, models, 0, [0, 0, 90], [2, 1, 1], [true], [true], 0, 0];
+  transformSceneModel(...args);
+  transformSceneModel(
+    r,
+    models,
+    0,
+    [0, 0, 0],
+    [1, 1, 1],
+    [true],
+    [true],
+    0,
+    0,
+  );
+  assert.deepEqual(models[0].vertices, original);
+  assert.throws(
+    () =>
+      transformSceneModel(
+        r,
+        models,
+        0,
+        [0, 0, 0],
+        [1, 0, 1],
+        [true],
+        [true],
+        0,
+        0,
+      ),
+    /positive finite/,
+  );
+  assert.deepEqual(models[0].vertices, original);
 });

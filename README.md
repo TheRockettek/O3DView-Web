@@ -32,6 +32,9 @@ outside the selected folder, select a common parent folder. Browser file
 access is restricted to what you explicitly select; your models are read
 locally and are not uploaded or cached by the app. Left-drag to orbit, right-
 or middle-drag to pan, and scroll to zoom. Fit view recenters the scene.
+Focus the viewport and use the arrow keys to pan in camera space; movement
+scales with the current zoom. The web and WebGL renderers use the same camera
+controls.
 **Focus selected model** (or F while the page or viewport has focus) centers
 the model selected in the material inspector, including a hidden model, without
 changing the viewing angle. Select a model in the scene list or material
@@ -44,16 +47,39 @@ power in the current scene; these changes are not saved to the original files.
 The selected model can also be renamed for the current scene; its original
 source remains displayed, and the scene name is used for model download names.
 Its world-space translation can be edited relative to its loaded placement.
-This moves only that model occurrence, not associated lights or cabin records;
-rotation, scale and parent transforms are not editable yet. Translation is
-included in picking, fitting and model, group and scene exports, without changing
-the source file. Each change rebuilds the scene's rendering resources and may
-take time for large scenes.
+Rotation (X/Y/Z degrees) and positive per-axis scale can also be edited for
+standard model occurrences. They pivot around the loaded map placement when
+available, or the model origin otherwise. Translation, rotation and scale affect
+only that model occurrence, not associated lights or cabin records; parent
+transforms are not editable. The resulting geometry is used by picking, fitting,
+and model, group, scene, and O3D exports without changing source files. Each
+change rebuilds the scene's rendering resources and may take time for large
+scenes.
+Loaded map splines and SCO paths also expose scene-local controls for placement,
+heading, length, radius, profile width, gradients, cant, skew, delta height and
+mirroring. Applying an edit regenerates that occurrence from its loaded spline
+profile; its visibility, selection, camera, materials and any separate map
+placement are retained. The source files are unchanged, and the edited geometry
+is used by viewport picking and model/group/scene exports. These controls do not
+edit or serialize the original map, SCO, or SLI files.
+**Duplicate selected model** adds a scene-local copy beside the source in the
+hierarchy, preserving its current placement and material settings. The copy has
+independent material and translation edits, participates in the same visibility
+groups, and follows repaint changes when the source has matching CTI slots.
+Source files are unchanged.
+Select a model-only group in the hierarchy and choose **Duplicate model-only
+group** to copy the entire subtree next to its source. This includes nested
+model and LOD entries; each copied model has independent material edits and
+repaint bindings, and copied LOD thresholds and group visibility are separate
+from the source. The first copied model is selected. Groups containing lights,
+cabin entries, splines, paths or other non-model entries cannot be duplicated.
 Viewport picking uses triangle geometry and visibility, not per-pixel texture
 alpha or special depth modes, so transparent surfaces can still be selected.
-Clicking a generated passenger-cabin marker selects its associated cabin item;
-other hits select the model occurrence. Repeated clicks at the same location
-step through overlapping models.
+Clicking a generated passenger-cabin marker or cabin-path strip selects its
+associated cabin item; other geometry hits select the model occurrence.
+Repeated clicks at the same location step through overlapping models.
+Alt-click geometry to select its containing hierarchy group while keeping the
+hit model selected in the material inspector.
 Enable **Cull back faces (desktop style)** to hide back-facing triangles in
 filled rendering and exclude them from picking. It is off by default to retain
 the original web viewer's two-sided rendering; wireframe remains two-sided.
@@ -73,18 +99,27 @@ and **Down** on a tree
 entry to reorder it among its current siblings. Reordering changes the scene
 tree and group-export traversal order only; it does not change render order,
 source data, or model transforms. Clear the scene filter before reordering.
+Selecting a model in the hierarchy inspector reports its source name, vertex
+and triangle counts, material count, and O3D version when available.
 Cabin items, including path points and links, can be renamed for the current
 scene; their original name and source record remain unchanged.
 **Focus cabin item** centers the view on a positioned cabin item, applying the
 same OMSI coordinate conversion and map placement used by its marker.
+**Focus cabin link** centers the view on the midpoint between its placed path
+endpoints without changing zoom or orbit.
 The selected group, model, light or cabin entry can be moved under another
 group or to the scene root from its inspector. Moving a group or model changes
 inherited model visibility and group-export membership; moving a light or
 cabin entry changes only its tree organization. Reparenting does not modify
 source files, render order, LOD membership, light state, cabin data or model
 transforms. LOD groups are not valid parent targets. Lights can be duplicated
-and deleted in the light inspector; model, group and cabin-entry duplication
-and deletion are not supported.
+and deleted in the light inspector. The hierarchy inspector can delete a
+standard model occurrence, a map-spline or SCO-path occurrence, or a model-only
+subtree containing those items. Deletion is scene-local: retained model
+references and repaint bindings are reindexed and source files remain unchanged,
+while remaining placements and transforms are preserved. Groups containing
+lights, cabin entries, or generated cabin marker/path geometry cannot be deleted
+with this control; cabin-entry deletion is not supported.
 Normally a configuration with no successfully loaded models leaves the previous
 scene visible. Enable **Open configurations without loaded models** to inspect
 its available hierarchy, lights and cabin data instead; missing references
@@ -190,8 +225,13 @@ remains editable but is not rendered until a slot opens. Enable
 with the desktop's default directional sun. Its direction,
 color, ambient contribution, intensity and on/off state are editable; press
 **Apply sun** to commit edits. This opt-in setting persists across scene loads
-in the current page; turning it off restores the original viewer lighting.
-The sun is not yet a scene-tree object and cannot be deleted or reparented.
+in the current page; turning it off restores the original viewer lighting. The
+sun appears as a protected, selectable scene-tree object. Its tree checkbox
+enables or disables the desktop-style sun, and its inspector reports the
+current lighting mode and values; the Lights panel remains the place to edit
+those values. The sun has no spatial focus target and cannot be deleted, but it
+can be moved between scene-tree parents for organization. It is viewer-session
+state and is not written to source files.
 As in the desktop default of 16
 lights including the sun, only the first 15 scene lights are rendered; a
 warning is shown when more are present. Disabled lights still occupy a slot,
@@ -203,6 +243,11 @@ behavior. The optional **Bind interior-light intensity variables** setting
 exposes these names in the scene variables panel and applies manual changes and
 repaint setvars to matching lights. This is an opt-in extension, not a claim
 that the desktop loader's current light binding works.
+Enable **Show interior-light references** to overlay each light's current
+position in the viewport. Markers follow camera orbit, pan, zoom and resize,
+and are hidden while outside the view. Selecting a marker selects that light
+in the hierarchy and inspector; the overlay does not change light enablement
+or rendering and is independent of the spline, path and cabin gizmo toggle.
 CTI files discovered in a configuration's CTC directory are enabled by
 default. Additional CTIs and their textures can be selected in the Repaints
 panel; use the folder chooser when a CTI refers to nested paths. Existing
@@ -265,19 +310,25 @@ current scene; connected strips and referencing cabin records update, but source
 files are unchanged. **Focus cabin point** centers the view at its rendered
 position, including axis conversion and map placement, without changing zoom
 or orbit. Path-link endpoints, direction, room height and step sound can also be
-edited; direction and metadata do not change the strip appearance.
+edited; direction and metadata do not change the strip appearance. **Focus
+cabin link** centers the view on the placed midpoint between its endpoints.
 Each valid cabin path point now has a small orange marker in the generated
 cabin-path mesh. The markers share the link strips' gizmo visibility and export
 behavior; point-only paths can therefore be edited even when every link is
-degenerate. Passenger cabin records with direct positions, such as seats, also
-show blue markers and can have their positions edited in the inspector;
+degenerate. Clicking an orange point marker selects that point in the cabin
+inspector; clicking a path strip selects its path link. Passenger cabin records
+with direct positions, such as seats, also
+show markers colored by record type (blue seats, yellow stampers, orange ticket
+sales, green money points and magenta change points) and can have their
+positions edited in the inspector;
 changes affect the current scene only. Records that only reference a path point,
 such as entries and exits, use the path marker and follow edits to that point.
 Indexed records that also contain an explicit position, such as stampers and
 ticket-sale points, get separate editable markers. All cabin markers share the
-gizmo toggle and export behavior. Seat height and rotation can be edited for
-the current scene; these attributes update the inspector data, not the
-position-only marker. Other cabin records are read-only.
+gizmo toggle and export behavior. These simplified markers are not the
+desktop's textured billboard icons or selected-seat preview. Seat height and
+rotation can be edited for the current scene; these attributes update the
+inspector data, not the position-only marker. Other cabin records are read-only.
 Map terrain and attachments are not rendered.
 
 ## Current limitations

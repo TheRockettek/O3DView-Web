@@ -49,6 +49,7 @@
         <label><input id="wireframe" type="checkbox" disabled> Wireframe</label>
         <label><input id="cull-backfaces" type="checkbox" disabled> Cull back faces (desktop style)</label>
         <label><input id="show-gizmos" type="checkbox" checked disabled> Show spline, path and cabin gizmos</label>
+        <label><input id="show-light-references" type="checkbox" disabled> Show interior-light references</label>
         <label for="global-night-strength">Global night map strength</label>
         <input id="global-night-strength" type="number" step="0.05" min="0" max="2" value="0" disabled>
       </section>
@@ -151,6 +152,8 @@
         <p>Select a model or group in the scene tree to inspect its hierarchy.</p>
         <pre id="scene-group-info">No scene node selected.</pre>
         <button id="focus-scene-group" type="button" class="secondary" disabled>Focus group</button>
+        <button id="delete-scene-node" type="button" class="secondary" disabled>Delete selected model, spline/path or model-only group</button>
+        <button id="duplicate-group" type="button" class="secondary" disabled>Duplicate model-only group</button>
         <form id="scene-group-form">
           <fieldset id="scene-group-fields" disabled>
             <label for="scene-group-name">Scene group name</label>
@@ -234,11 +237,56 @@
             <button type="submit" class="secondary">Rename model</button>
           </fieldset>
         </form>
+        <button id="duplicate-model" class="secondary" disabled>Duplicate selected model</button>
         <form id="model-translation-form">
           <fieldset id="model-translation-fields" disabled>
             <label for="model-translation">World translation from loaded placement (X Y Z)</label>
             <input id="model-translation" required>
             <button type="submit" class="secondary">Apply translation</button>
+          </fieldset>
+        </form>
+        <form id="model-transform-form" hidden>
+          <fieldset id="model-transform-fields" disabled>
+            <legend>Object rotation and scale</legend>
+            <p class="muted">Rotation uses scene axes around the loaded map placement, or the model origin when unplaced. Scale components must be positive.</p>
+            <label for="model-rotation">Rotation X Y Z (degrees)</label>
+            <input id="model-rotation" required>
+            <label for="model-scale">Scale X Y Z</label>
+            <input id="model-scale" required>
+            <button type="submit" class="secondary">Apply rotation and scale</button>
+          </fieldset>
+        </form>
+        <form id="spline-form" hidden>
+          <fieldset id="spline-fields" disabled>
+            <legend>Map spline / SCO path properties</legend>
+            <p class="muted">Edits rebuild this scene occurrence only; source files are unchanged.</p>
+            <label for="spline-position">OMSI position (X Y Z)</label>
+            <input id="spline-position" required>
+            <label for="spline-heading">Heading (degrees)</label>
+            <input id="spline-heading" type="number" step="any" required>
+            <label for="spline-length">Length</label>
+            <input id="spline-length" type="number" step="any" required>
+            <label for="spline-radius">Radius</label>
+            <input id="spline-radius" type="number" step="any" required>
+            <label for="spline-width">Profile width scale</label>
+            <input id="spline-width" type="number" step="any" required>
+            <label for="spline-grad-start">Start gradient</label>
+            <input id="spline-grad-start" type="number" step="any" required>
+            <label for="spline-grad-end">End gradient</label>
+            <input id="spline-grad-end" type="number" step="any" required>
+            <label for="spline-cant-start">Start cant</label>
+            <input id="spline-cant-start" type="number" step="any" required>
+            <label for="spline-cant-end">End cant</label>
+            <input id="spline-cant-end" type="number" step="any" required>
+            <label for="spline-skew-start">Start skew</label>
+            <input id="spline-skew-start" type="number" step="any" required>
+            <label for="spline-skew-end">End skew</label>
+            <input id="spline-skew-end" type="number" step="any" required>
+            <label><input id="spline-use-delta-height" type="checkbox"> Use delta-height gradient</label>
+            <label for="spline-delta-height">Delta height</label>
+            <input id="spline-delta-height" type="number" step="any" required>
+            <label><input id="spline-mirror" type="checkbox"> Mirror profile</label>
+            <button type="submit" class="secondary">Apply spline properties</button>
           </fieldset>
         </form>
         <label for="material-select">Material</label>
@@ -300,12 +348,13 @@
       </section>
       <section>
         <h2>Controls</h2>
-        <p>Left-drag to orbit · right- or middle-drag to pan · scroll to zoom · F to focus the selected model · Fit view to recenter</p>
+        <p>Left-drag to orbit · right- or middle-drag to pan · scroll to zoom · focus the viewport and use arrow keys to pan · F to focus the selected model · Fit view to recenter</p>
         <p class="muted">This is an early port. Some OMSI formats, materials and editor features are not yet supported.</p>
       </section>
     </aside>
     <section class="viewport" aria-label="3D model viewport">
       <canvas id="viewport" aria-label="3D model" tabindex="0"></canvas>
+      <div id="light-reference-layer" class="light-reference-layer" aria-label="Interior-light references" hidden></div>
       <div id="placeholder" class="placeholder">Choose a model to begin</div>
     </section>
   </main>

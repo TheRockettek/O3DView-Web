@@ -369,6 +369,77 @@ test("all active CTIs participate in every configuration", async () => {
   assert.equal(models[1].materials[0].texture.source, "first.cti");
 });
 
+test("duplicated models retain repaint mappings and original textures", async () => {
+  const { result, session, variables, visibility, renderer } = await fixture();
+  const source = result.models[0];
+  const duplicate = {
+    ...source,
+    materials: source.materials.map((material) => ({ ...material })),
+  };
+  const duplicateIndex = result.models.length;
+  const secondDuplicate = {
+    ...source,
+    materials: source.materials.map((material) => ({ ...material })),
+  };
+  result.models.push(duplicate, secondDuplicate);
+  session.includeDuplicates([
+    [0, duplicateIndex],
+    [0, duplicateIndex + 1],
+  ]);
+
+  await session.apply(renderer, "Blue", variables, visibility);
+  for (const copy of [duplicate, secondDuplicate]) {
+    assert.equal(copy.materials[0].texture.path, "Bus/texture/Repaints/blue.png");
+    assert.equal(
+      copy.materials[0].bumpmap.path,
+      "Bus/texture/Repaints/bluebump.png",
+    );
+  }
+  await session.apply(renderer, null, variables, visibility);
+  for (const copy of [duplicate, secondDuplicate]) {
+    assert.equal(copy.materials[0].texture.path, "Bus/texture/body.png");
+    assert.equal(copy.materials[0].bumpmap.path, "Bus/texture/bump.png");
+  }
+  session.dispose();
+});
+
+test("removing models reindexes repaint mappings for retained copies", async () => {
+  const { result, session, visibility, renderer } = await fixture();
+  const source = result.models[0];
+  const copies = [0, 1].map(() => ({
+    ...source,
+    materials: source.materials.map((material) => ({ ...material })),
+  }));
+  result.models.push(...copies);
+  session.includeDuplicates([
+    [0, 1],
+    [0, 2],
+  ]);
+  session.removeModels([0]);
+  result.models.splice(0, 1);
+  visibility.manualVisibility.splice(0, 1, true, true);
+  visibility.configVisibility.splice(0, 1, true, true);
+  const variables = collectSceneVariables(result.models);
+
+  await session.apply(renderer, "Blue", variables, visibility);
+  for (const copy of copies) {
+    assert.equal(
+      copy.materials[0].texture.path,
+      "Bus/texture/Repaints/blue.png",
+    );
+    assert.equal(
+      copy.materials[0].bumpmap.path,
+      "Bus/texture/Repaints/bluebump.png",
+    );
+  }
+  await session.apply(renderer, null, variables, visibility);
+  for (const copy of copies) {
+    assert.equal(copy.materials[0].texture.path, "Bus/texture/body.png");
+    assert.equal(copy.materials[0].bumpmap.path, "Bus/texture/bump.png");
+  }
+  session.dispose();
+});
+
 test("material edits made while textures load survive repaint application", async () => {
   let resolveTexture;
   const material = { textureName: "body.png", texture: {}, specPower: 1 };

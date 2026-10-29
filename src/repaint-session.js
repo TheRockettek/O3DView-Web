@@ -72,12 +72,180 @@ export function createRepaintSession(models, groups, textures) {
     bindings.set(group, grouped);
   }
 
+  function includeDuplicates(pairs) {
+    if (!Array.isArray(pairs)) throw new TypeError("Invalid duplicated models");
+    const targetIndices = new Set();
+    for (const [sourceIndex, targetIndex] of pairs) {
+      if (
+        !Number.isInteger(sourceIndex) ||
+        !Number.isInteger(targetIndex) ||
+        !models[sourceIndex] ||
+        !models[targetIndex] ||
+        sourceIndex === targetIndex ||
+        targetIndices.has(targetIndex)
+      )
+        throw new RangeError("Invalid duplicated repaint model");
+      targetIndices.add(targetIndex);
+    }
+    const additions = [];
+    const groupTargets = new Map();
+    for (const group of groups) {
+      const grouped = bindings.get(group);
+      if (!grouped) throw new Error("Missing repaint bindings for a group");
+      const slots = new Map(
+        group.ctc.textures.map((slot) => [slot.name.toLowerCase(), slot]),
+      );
+      for (const [sourceIndex, targetIndex] of pairs) {
+        if (
+          !group.modelIndices.includes(sourceIndex) ||
+          group.modelIndices.includes(targetIndex)
+        )
+          continue;
+        const target = models[targetIndex];
+        if (!groupTargets.has(group)) groupTargets.set(group, []);
+        groupTargets.get(group).push(targetIndex);
+        for (const [materialIndex, material] of target.materials.entries()) {
+          for (const slot of slots.values()) {
+            for (const map of MAPS) {
+              const name = material[`${map}Name`];
+              if (!name || pathKey(name) !== pathKey(slot.path)) continue;
+              const sourceOriginal = originals.get(
+                `${sourceIndex}:${materialIndex}`,
+              );
+              if (!sourceOriginal) continue;
+              const slotKey = slot.name.toLowerCase();
+              const targets = grouped.get(slotKey);
+              if (!targets)
+                throw new Error(
+                  `Missing repaint slot "${slotKey}" for duplicated model`,
+                );
+              const key = `${targetIndex}:${materialIndex}`;
+              additions.push({
+                key,
+                map,
+                targets,
+                original: {
+                  ...sourceOriginal,
+                  modelIndex: targetIndex,
+                  materialIndex,
+                  material,
+                  maps: { ...sourceOriginal.maps },
+                },
+              });
+            }
+          }
+        }
+      }
+    }
+    const newOriginals = new Map();
+    for (const addition of additions)
+      if (!newOriginals.has(addition.key))
+        newOriginals.set(addition.key, addition.original);
+    for (const [group, indices] of groupTargets)
+      group.modelIndices.push(...indices);
+    for (const [key, original] of newOriginals) originals.set(key, original);
+    for (const addition of additions)
+      addition.targets.push({ key: addition.key, map: addition.map });
+  }
+
+  function includeDuplicate(sourceIndex, targetIndex) {
+    includeDuplicates([[sourceIndex, targetIndex]]);
+  }
+
+  function removeModels(indices) {
+    if (!Array.isArray(indices)) throw new TypeError("Invalid removed models");
+    const removed = new Set(indices);
+    if (
+      removed.size !== indices.length ||
+      [...removed].some(
+        (index) => !Number.isInteger(index) || !models[index],
+      )
+    )
+      throw new RangeError("Invalid removed repaint model");
+    if (!removed.size) return;
+
+    const modelIndices = new Map();
+    let nextIndex = 0;
+    for (let index = 0; index < models.length; index++)
+      if (!removed.has(index)) modelIndices.set(index, nextIndex++);
+
+    const nextOriginals = new Map();
+    for (const original of originals.values()) {
+      const modelIndex = modelIndices.get(original.modelIndex);
+      if (modelIndex === undefined) continue;
+      const key = `${modelIndex}:${original.materialIndex}`;
+      if (nextOriginals.has(key))
+        throw new Error("Duplicate repaint material binding after removal");
+      nextOriginals.set(key, { ...original, modelIndex });
+    }
+
+    const nextBindings = new Map(),
+      nextGroupIndices = new Map();
+    for (const group of groups) {
+      const grouped = bindings.get(group);
+      if (!grouped) throw new Error("Missing repaint bindings for a group");
+      const nextGroup = new Map();
+      for (const [slot, targets] of grouped) {
+        const nextTargets = [];
+        for (const target of targets) {
+          const separator = target.key.indexOf(":");
+          const oldModelIndex = Number(target.key.slice(0, separator));
+          const materialIndex = Number(target.key.slice(separator + 1));
+          if (
+            separator < 0 ||
+            !Number.isInteger(oldModelIndex) ||
+            !Number.isInteger(materialIndex) ||
+            !models[oldModelIndex]
+          )
+            throw new Error("Invalid repaint material binding");
+          const modelIndex = modelIndices.get(oldModelIndex);
+          if (modelIndex !== undefined)
+            nextTargets.push({
+              ...target,
+              key: `${modelIndex}:${materialIndex}`,
+            });
+        }
+        nextGroup.set(slot, nextTargets);
+      }
+      nextBindings.set(group, nextGroup);
+      nextGroupIndices.set(
+        group,
+        group.modelIndices.flatMap((index) => {
+          const modelIndex = modelIndices.get(index);
+          return modelIndex === undefined ? [] : [modelIndex];
+        }),
+      );
+    }
+
+    originals.clear();
+    for (const [key, original] of nextOriginals) originals.set(key, original);
+    for (const group of groups) {
+      group.modelIndices.length = 0;
+      for (const index of nextGroupIndices.get(group))
+        group.modelIndices.push(index);
+      bindings.set(group, nextBindings.get(group));
+    }
+  }
+
+  function referencesTexture(texture) {
+    for (const original of originals.values())
+      if (Object.values(original.maps).includes(texture)) return true;
+    return false;
+  }
+
   return {
     get schemes() {
       return [...schemes];
     },
     get ctis() {
       return [...ctis.values()];
+    },
+    includeDuplicates,
+    includeDuplicate,
+    removeModels,
+    referencesTexture,
+    ownsTexture(texture) {
+      return textures.ownsTexture?.(texture) === true;
     },
     addCTIs,
     async importFiles(files, isCurrent) {

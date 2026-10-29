@@ -15,7 +15,9 @@ an item complete. Paths below are relative to this file.
   variables, CTI/CTC repaint selection, mesh and parent-group visibility, and
   viewpoint filtering.
 - Orbit, pan, zoom, fit view, wireframe, a browsable scene tree and material inspector.
-  Selected models can be downloaded as OBJ/MTL or unencrypted O3D.
+  Selected models can be downloaded as OBJ/MTL or unencrypted O3D. Interior-light
+  viewport references can be toggled independently of other gizmos and selected
+  to inspect the corresponding light.
 - WebGPU and WebGL 2 renderers, searchable dropdowns, and offline app caching.
 
 These features are not necessarily equivalent in all cases. See
@@ -37,22 +39,38 @@ These features are not necessarily equivalent in all cases. See
   LOD groups cannot be parent targets; their source membership remains intact.
   Model, light and cabin entries can also be reparented without changing their
   source records. Scene lights can be duplicated as independent instances
-  without source variable bindings. Still support model/group duplication and
-  broader hierarchy deletion; preserve local transforms. Verify repeated
-  references and resource ownership.
+  without source variable bindings. Selected model occurrences can now be
+  duplicated next to their source with independent material edits and repaint
+  bindings. Model-only groups, including nested LOD entries, can also be
+  duplicated with their hierarchy, visibility settings and repaint bindings.
+  Groups containing lights, cabin entries or generated geometry are not
+  duplicable. Standard model occurrences and model-only groups can now be
+  deleted from this scene; retained model indices and repaint bindings are
+  remapped. Standalone map-spline/SCO-path occurrences and model-only groups
+  containing them can also be deleted. Mixed groups, generated cabin
+  marker/path geometry and cabin entries remain non-deletable from the
+  hierarchy inspector. Verify repeated references and resource ownership.
   Desktop: [hierarchy](../O3DView/O3DView/GUI/HierarchyWindow.cs),
   [scene graph](../O3DView/O3DView/SceneGraph.cs).
   Web: [scene loader](src/scene.js), [scene list](src/app.js).
 - [ ] **Complete map and SCO spline support.** Map placements and SCO paths
   now load profile textures and generated geometry, including width, curvature,
   cant, skew and mirroring, and participate in fitting, visibility and export.
-  Add editable spline properties and compare more real assets against desktop.
+  Scene-local controls now edit placement, heading, length, radius, profile
+  width, gradients, cant, skew, delta height and mirroring by regenerating the
+  occurrence from its loaded profile. Source map/SCO/SLI files are not changed
+  or serialized. Compare more real assets against desktop.
   Desktop: [loader](../O3DView/O3DView/FileLoader.cs),
   [spline generator](../O3DView/O3DParse/SplineMeshGenerator.cs).
   Web: [map records](src/map-tile.js), [spline generation](src/spline.js).
 - [ ] **Complete LOD parity.** All parsed LODs, group toggles, editable thresholds
-  and the manual view-radius control are supported. Verify against real assets and integrate
-  groups into the planned scene hierarchy and inspector editing.
+  and the manual view-radius control are supported. Desktop source comparison
+  confirms that every CFG LOD is loaded, each LOD starts visible, and the
+  desktop's 0-to-1 `LOD View Radius` shows a level when the radius is greater
+  than or equal to its threshold; the web control follows the same rule.
+  Synthetic UI regressions now cover the equality boundary and applying a
+  changed threshold through the hierarchy inspector. Verify against
+  representative real assets and both renderers.
   Desktop: [loader](../O3DView/O3DView/FileLoader.cs),
   [inspector](../O3DView/O3DView/GUI/InspectorWindow.cs);
   web: [scene loader](src/scene.js).
@@ -81,15 +99,23 @@ These features are not necessarily equivalent in all cases. See
 
 - [ ] **Implement object inspector and transforms.** Select objects in the tree
   and viewport; inspect source, mesh metadata and object-specific properties.
-  Models can be selected by viewport triangle picking, but picking does not yet
+  The hierarchy inspector now reports a selected model's source name, vertex
+  and triangle counts, material count and O3D version when available. Models
+  can be selected by viewport triangle picking, but picking does not yet
   account for texture alpha or special depth modes. Support general objects;
-  clicking a positioned passenger-cabin marker selects its cabin item in the
-  inspector.
+  clicking passenger-cabin or path-point markers or path strips selects the
+  corresponding cabin item in the inspector. Alt-clicking model geometry
+  selects its containing hierarchy group. Interior-light viewport markers
+  select the corresponding light in the hierarchy and inspector.
   rename selected models, groups, lights and cabin items, and translate
-  individual model occurrences relative to their loaded placement. Edit other
-  object names, parent, position, rotation and scale. Ensure transforms affect
-  rendering, lights, fitting and export consistently. Preserve local geometry
-  instead of permanently baking map placement into vertices.
+  individual model occurrences relative to their loaded placement. Standard
+  model occurrences now also support scene-local X/Y/Z rotation and positive
+  per-axis scale, using the loaded map placement or model origin as pivot.
+  Transformed vertices flow through rendering, picking, fitting and supported
+  exports. Associated lights/cabin records and parent transforms are not moved;
+  map placement remains baked into loaded vertices. Edit remaining object
+  properties and preserve local geometry instead of permanently baking map
+  placement into vertices.
   Desktop: [inspector](../O3DView/O3DView/GUI/InspectorWindow.cs),
   [click selection](../O3DView/O3DView/ClickSelectionManager.cs);
   web: [map transform](src/map-transform.js).
@@ -101,10 +127,14 @@ These features are not necessarily equivalent in all cases. See
   changed for the current scene, and supported cabin records inspected.
   Selected path points can be focused at their placed world
   positions, and each valid point has a marker in the generated cabin-path
-  mesh. Passenger cabin records with explicit positions, including indexed
+  mesh. Selected path links can be focused at the midpoint of their placed
+  endpoints. Passenger cabin records with explicit positions, including indexed
   records such as stampers and ticket points, also have editable markers;
   records with only a path-point reference share the corresponding point marker.
-  Viewport picks on passenger-cabin markers select the associated cabin record.
+  Direct-position markers are now color-coded by record type, but remain
+  simplified geometry rather than desktop textured billboards or seat previews.
+  Viewport picks on passenger-cabin and path-point markers select the
+  associated cabin record; path-strip hits select their corresponding link.
   Positioned cabin items can be focused at their placed world positions.
   Seat height and rotation are editable for the current scene; the marker
   continues to represent position only.
@@ -112,9 +142,11 @@ These features are not necessarily equivalent in all cases. See
   Desktop: [loader](../O3DView/O3DView/FileLoader.cs),
   [inspector](../O3DView/O3DView/GUI/InspectorWindow.cs).
 - [ ] **Complete lighting controls.** Integrate light transforms and selection
-  with the scene hierarchy, including the default sun. An opt-in editable
-  desktop-style directional sun replaces the web viewer's original fixed
-  lighting, but it is not yet a scene object. Point
+  with the scene hierarchy, including the default sun. The opt-in editable
+  desktop-style directional sun now appears as a protected, selectable
+  hierarchy node; its tree checkbox mirrors the Lights-panel opt-in control,
+  and its inspector reports the active lighting mode and values. It remains
+  session-only and has no spatial focus target. Point
   and directional lights can be created, duplicated and edited for the
   current scene;
   ambient-only and desktop-style non-rendering spot modes are selectable.
@@ -130,11 +162,17 @@ These features are not necessarily equivalent in all cases. See
   Desktop: [variable manager](../O3DView/O3DView/VariableManager.cs),
   [GUI controller](../O3DView/O3DView/GUI/GUIController.cs);
   web: [light controls](src/app.js).
-- [ ] **Match desktop view controls.** Add remaining gizmos and interior-light reference toggles, and
-  texture reload. Compare mouse and keyboard interaction and ensure both web
+- [ ] **Match desktop view controls.** Add remaining gizmos and
+  texture reload. Viewport-focused arrow keys now pan in camera space, matching
+  the desktop camera's arrow-key movement in both web renderers. Browser-picked
+  files are immutable snapshots, so refreshing externally changed textures
+  requires reselecting the updated files; a safe scene-preserving replacement
+  flow remains open. Compare mouse and keyboard interaction and ensure both web
   renderers behave consistently. Fullbright, highlighting, model picking and
   focus for models, groups, lights and positioned cabin items are supported;
-  viewport picking remains model-only. Desktop:
+  viewport picking maps passenger-cabin markers and path strips to their
+  associated cabin items; Alt-click selects a containing group; viewport
+  interior-light markers select the corresponding light. Desktop:
   [view menu](../O3DView/O3DView/GUI/GUIController.cs),
   [camera](../O3DView/O3DView/Camera.cs).
 - [ ] **Extend variable and material inspection.** Match desktop variable

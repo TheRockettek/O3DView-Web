@@ -158,6 +158,44 @@ for (const [name, create] of [
     assert.equal(frames, 5);
   });
 
+  test(`${name} pans in camera space with viewport arrow keys`, () => {
+    const listeners = new Map();
+    const canvas = {
+      clientWidth: 200,
+      clientHeight: 100,
+      addEventListener: (event, handler) => listeners.set(event, handler),
+    };
+    const renderer = create(canvas);
+    let frames = 0,
+      prevented = 0;
+    renderer._requestFrame = () => frames++;
+    renderer._target = [0, 0, 0];
+    renderer._yaw = Math.PI / 2;
+    renderer._pitch = 0;
+    renderer._distance = 10;
+    renderer._installEvents();
+    const keydown = (key) =>
+      listeners.get("keydown")({
+        key,
+        preventDefault: () => prevented++,
+      });
+    const step = 0.06 * 10 * Math.tan(Math.PI / 6);
+
+    keydown("ArrowRight");
+    assert.ok(Math.abs(renderer._target[0] - step) < 1e-10);
+    assert.ok(Math.abs(renderer._target[1]) < 1e-10);
+    assert.ok(Math.abs(renderer._target[2]) < 1e-10);
+    keydown("ArrowUp");
+    assert.ok(Math.abs(renderer._target[2] + step) < 1e-10);
+    assert.equal(renderer._yaw, Math.PI / 2);
+    assert.equal(renderer._pitch, 0);
+    assert.equal(frames, 2);
+    assert.equal(prevented, 2);
+    keydown("Enter");
+    assert.equal(frames, 2);
+    assert.equal(prevented, 2);
+  });
+
   test(`${name} focuses a selected occurrence and fit restores the scene`, () => {
     const renderer = create({ clientWidth: 200, clientHeight: 100 });
     renderer._requestFrame = () => {};

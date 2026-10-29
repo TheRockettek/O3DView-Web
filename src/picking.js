@@ -152,3 +152,50 @@ export function pickModelHit(
     ? { index: selected.index, triangleIndex: selected.triangleIndex }
     : null;
 }
+
+export function projectWorldPosition(renderer, position) {
+  renderer._assertUsable();
+  if (
+    !Array.isArray(position) ||
+    position.length < 3 ||
+    !position.slice(0, 3).every(Number.isFinite)
+  )
+    return null;
+  const rect = renderer.canvas.getBoundingClientRect();
+  if (!(rect.width > 0 && rect.height > 0)) return null;
+  const {
+    _target: target,
+    _distance: distance,
+    _yaw: yaw,
+    _pitch: pitch,
+  } = renderer;
+  const cp = Math.cos(pitch),
+    sp = Math.sin(pitch),
+    cy = Math.cos(yaw),
+    sy = Math.sin(yaw);
+  const back = [cy * cp, sp, sy * cp],
+    right = [sy, 0, -cy],
+    up = [-sp * cy, cp, -sp * sy];
+  const eye = target.map((value, i) => value + distance * back[i]);
+  const offset = subtract(position.slice(0, 3), eye);
+  const depth = -dot(offset, back);
+  if (!(depth > 0)) return null;
+  const aspect =
+    renderer.canvas.width > 0 && renderer.canvas.height > 0
+      ? renderer.canvas.width / renderer.canvas.height
+      : rect.width / rect.height;
+  const scale = depth * Math.tan(Math.PI / 6);
+  const x = dot(offset, right) / (scale * aspect);
+  const y = dot(offset, up) / scale;
+  if (
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    Math.abs(x) > 1 ||
+    Math.abs(y) > 1
+  )
+    return null;
+  return {
+    x: ((x + 1) / 2) * rect.width,
+    y: ((1 - y) / 2) * rect.height,
+  };
+}

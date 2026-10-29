@@ -1,10 +1,67 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  deletableSceneModelIndices,
+  canContainSceneNode,
   moveSceneNode,
   reparentSceneNode,
   restoreSceneNodeParent,
 } from "../src/scene-hierarchy.js";
+
+test("scene deletion accepts standard models and isolated spline/path geometry", () => {
+  const models = [
+    {},
+    { gizmoVisible: true, splineSource: {}, splinePlacement: {} },
+    { gizmoVisible: true, splineSource: {}, pathPlacement: {} },
+    { gizmoVisible: true, cabinPathSource: "cabin.cfg" },
+  ];
+  const model = { type: "model", modelIndex: 0, children: [] };
+  const spline = { type: "spline", modelIndex: 1, children: [] };
+  const path = { type: "path", modelIndex: 2, children: [] };
+
+  assert.deepEqual(deletableSceneModelIndices(model, models), [0]);
+  assert.deepEqual(deletableSceneModelIndices(spline, models), [1]);
+  assert.deepEqual(deletableSceneModelIndices(path, models), [2]);
+  assert.equal(
+    deletableSceneModelIndices(
+      { type: "model", modelIndex: 3, children: [] },
+      models,
+    ),
+    null,
+  );
+  assert.equal(
+    deletableSceneModelIndices(
+      { type: "spline", modelIndex: 0, children: [] },
+      models,
+    ),
+    null,
+  );
+});
+
+test("scene deletion allows model-only groups with spline/path leaves, not mixed groups", () => {
+  const models = [
+    {},
+    { gizmoVisible: true, splineSource: {}, splinePlacement: {} },
+  ];
+  const group = {
+    type: "map",
+    children: [
+      { type: "model", modelIndex: 0, children: [] },
+      { type: "spline", modelIndex: 1, children: [] },
+    ],
+  };
+  assert.deepEqual(deletableSceneModelIndices(group, models), [0, 1]);
+  assert.equal(
+    deletableSceneModelIndices(
+      {
+        ...group,
+        children: [...group.children, { type: "light", lightIndex: 0 }],
+      },
+      models,
+    ),
+    null,
+  );
+});
 
 test("scene nodes move one position within their sibling list", () => {
   const first = { name: "first" };
@@ -18,6 +75,19 @@ test("scene nodes move one position within their sibling list", () => {
   assert.deepEqual(siblings, [first, third, second]);
   assert.equal(moveSceneNode(siblings, second, 1), false);
   assert.deepEqual(siblings, [first, third, second]);
+});
+
+test("the scene sun is a protected leaf, not a parent or deletable model group", () => {
+  const sun = { type: "sun", children: [] };
+  const parent = { type: "configuration", children: [] };
+
+  assert.equal(canContainSceneNode(sun), false);
+  assert.equal(canContainSceneNode(parent), true);
+  assert.equal(deletableSceneModelIndices(sun, []), null);
+  assert.throws(
+    () => reparentSceneNode([sun, parent], parent, sun),
+    /cannot contain children/,
+  );
 });
 
 test("scene node moves reject invalid nodes and directions", () => {

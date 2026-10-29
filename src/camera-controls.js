@@ -89,6 +89,32 @@ export function animateSelection(renderer) {
 }
 
 export function pointerControls(renderer) {
+  const keyDown = (event) => {
+    const horizontal =
+      event.key === "ArrowLeft" || event.key === "ArrowRight";
+    if (
+      !horizontal &&
+      event.key !== "ArrowUp" &&
+      event.key !== "ArrowDown"
+    )
+      return;
+    event.preventDefault();
+    const step = 0.06 * renderer._distance * Math.tan(FOV / 2);
+    const { _yaw: yaw, _pitch: pitch } = renderer;
+    const right = [Math.sin(yaw), 0, -Math.cos(yaw)];
+    const forward = [
+      -Math.cos(yaw) * Math.cos(pitch),
+      -Math.sin(pitch),
+      -Math.sin(yaw) * Math.cos(pitch),
+    ];
+    const axis = horizontal ? right : forward;
+    const sign =
+      event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
+    renderer._target = renderer._target.map(
+      (value, index) => value + axis[index] * sign * step,
+    );
+    renderer._requestFrame();
+  };
   const down = (event) => {
     if (![0, 1, 2].includes(event.button) || renderer._pointer) return;
     renderer._pointer = {
@@ -137,5 +163,11 @@ export function pointerControls(renderer) {
     if (renderer.canvas.hasPointerCapture?.(event.pointerId))
       renderer.canvas.releasePointerCapture(event.pointerId);
   };
-  return { down, move, up, contextMenu: (event) => event.preventDefault() };
+  return {
+    down,
+    move,
+    up,
+    keyDown,
+    contextMenu: (event) => event.preventDefault(),
+  };
 }

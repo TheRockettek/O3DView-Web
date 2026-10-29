@@ -9,6 +9,7 @@ import { loadScene } from "../src/scene.js";
 import { writeO3D } from "../src/o3d-write.js";
 import { parseO3D } from "../src/o3d.js";
 import { exportWavefront } from "../src/obj-export.js";
+import { generatePlacedSplineGeometry } from "../src/spline-edit.js";
 
 const profileText = [
   "[texture]",
@@ -125,6 +126,31 @@ test("generates desktop straight strips and mirror winding with longitudinal UVs
   assert.deepEqual([...mirror.triangles.slice(0, 8)], [1, 3, 0, 0, 3, 2, 0, 0]);
 });
 
+test("rebuilds spline geometry with edited width and independent map placement", () => {
+  const profile = parseSplineProfile(profileText);
+  const placement = {
+    ...spline,
+    position: { x: 10, y: 2, z: 3 },
+    heading: 90,
+  };
+  const original = generatePlacedSplineGeometry(placement, profile);
+  const edited = generatePlacedSplineGeometry(
+    { ...placement, width: 2, length: 4 },
+    profile,
+  );
+  const withMapPlacement = generatePlacedSplineGeometry(
+    { ...placement, width: 2, length: 4 },
+    profile,
+    { position: { x: 5, y: 1, z: 2 }, heading: 0 },
+  );
+  assert.notDeepEqual(edited.vertices, original.vertices);
+  assert.equal(edited.vertices[1], original.vertices[1]);
+  assert.equal(withMapPlacement.vertices[0], edited.vertices[0] + 5);
+  assert.equal(withMapPlacement.vertices[1], edited.vertices[1] + 1);
+  assert.equal(withMapPlacement.vertices[2], edited.vertices[2] + 2);
+  assert.deepEqual(withMapPlacement.triangles, edited.triangles);
+});
+
 test("curves, gradient, cant and skew affect endpoints and UVs", () => {
   const profile = parseSplineProfile(profileText);
   const curve = generateSplineMesh(
@@ -221,6 +247,8 @@ test("map splines resolve profiles and textures and preserve separate placements
   assert.equal(result.models[0].vertices[2], 3);
   assert.equal(result.models[1].vertices[0], 19);
   assert.equal(result.models[0].materials[0].texture, bitmap);
+  assert.equal(result.models[0].splineSource.profile.profiles.length, 1);
+  assert.equal(result.models[0].splineSource.mapPlacement, null);
   assert.equal(result.models[0].gizmoVisible, true);
   assert.equal(parseO3D(writeO3D(result.models[0])).vertices[0], 9);
   assert.match(exportWavefront(result.models[0]).obj, /v -9 2 3/);

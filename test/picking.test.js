@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickModel, pickModelHit } from "../src/picking.js";
+import {
+  pickModel,
+  pickModelHit,
+  projectWorldPosition,
+} from "../src/picking.js";
 import { modelBounds } from "../src/camera-controls.js";
 
 function triangle(z, x = 0) {
@@ -86,6 +90,15 @@ test("detailed picking reports the nearest triangle while model picking stays co
     triangleIndex: 1,
   });
   assert.equal(pickModel(renderer, models, 110, 70), 0);
+});
+
+test("world projection maps camera target to viewport center and excludes points behind the camera", () => {
+  const renderer = camera([]);
+  assert.deepEqual(projectWorldPosition(renderer, [0, 0, 0]), {
+    x: 100,
+    y: 50,
+  });
+  assert.equal(projectWorldPosition(renderer, [0, 0, 11]), null);
 });
 
 test("picking uses reflected model X, camera orientation, clipping and inside bounds", () => {

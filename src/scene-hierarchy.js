@@ -16,6 +16,7 @@ export function canContainSceneNode(node) {
     node.type !== "model" &&
     node.type !== "lod" &&
     node.type !== "light" &&
+    node.type !== "sun" &&
     node.type !== "cabin-item"
   );
 }
@@ -25,6 +26,50 @@ export function containsSceneNode(root, candidate) {
     root === candidate ||
     root.children?.some((child) => containsSceneNode(child, candidate)) === true
   );
+}
+
+export function deletableSceneModelIndices(node, models) {
+  if (!node || !Array.isArray(models)) return null;
+  if (node.modelIndex !== undefined) {
+    const model = models[node.modelIndex];
+    if (!Number.isInteger(node.modelIndex) || !model || node.children?.length)
+      return null;
+    if (
+      node.type === "model" &&
+      model.gizmoVisible === undefined &&
+      !model.cabinPathSource &&
+      !model.cabinMarkerSource &&
+      !model.splineSource &&
+      !model.splinePlacement &&
+      !model.pathPlacement
+    )
+      return [node.modelIndex];
+    if (
+      node.type === "spline" &&
+      model.gizmoVisible === true &&
+      model.splineSource &&
+      model.splinePlacement
+    )
+      return [node.modelIndex];
+    if (
+      node.type === "path" &&
+      model.gizmoVisible === true &&
+      model.splineSource &&
+      model.pathPlacement
+    )
+      return [node.modelIndex];
+    return null;
+  }
+  if (!["configuration", "map", "lod", "group"].includes(node.type))
+    return null;
+  if (!Array.isArray(node.children) || !node.children.length) return null;
+  const indices = [];
+  for (const child of node.children) {
+    const childIndices = deletableSceneModelIndices(child, models);
+    if (!childIndices) return null;
+    indices.push(...childIndices);
+  }
+  return indices.length ? indices : null;
 }
 
 export function findSceneNodeParent(hierarchy, target) {

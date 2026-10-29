@@ -16,9 +16,11 @@ import { parseCTC, parseCTI } from "./repaints.js";
 import {
   parseSplineProfile,
   parseScoPaths,
-  generateSplineMesh,
 } from "./spline.js";
+import { generatePlacedSplineGeometry } from "./spline-edit.js";
 import {
+  CABIN_MARKER_COLORS,
+  CABIN_MARKER_TRIANGLE_COUNT,
   parseCabinPaths,
   parsePassengerCabin,
   generateCabinMarkerMesh,
@@ -343,9 +345,8 @@ export async function loadScene(files, entryPaths, options = {}) {
     warnings.push(
       ...profile.warnings.map((warning) => `${child.path}: ${warning}`),
     );
-    const geometry = generateSplineMesh(spline, profile);
-    let vertices = placeMapVertices(geometry.vertices, spline);
-    if (placement) vertices = placeMapVertices(vertices, placement);
+    const geometry = generatePlacedSplineGeometry(spline, profile, placement);
+    const vertices = geometry.vertices;
     if (!vertices.every(Number.isFinite))
       throw new RangeError("Spline placement exceeds 32-bit float range");
     const materials = profile.textures.map((textureName) => ({
@@ -370,6 +371,10 @@ export async function loadScene(files, entryPaths, options = {}) {
             ...(placement ? { mapPlacement: placement } : {}),
           }
         : { splinePlacement: spline }),
+      splineSource: {
+        profile,
+        mapPlacement: placement,
+      },
     });
     parent.push({
       type: pathSource ? "path" : "spline",
@@ -843,6 +848,9 @@ export async function loadScene(files, entryPaths, options = {}) {
                 pathState,
               },
             }));
+            const cabinPathLinkItems = geometry.linkIndices.map(
+              (index) => links[index].info,
+            );
             if (links.length)
               node.children.push({
                 type: "cabin-links",
@@ -858,9 +866,16 @@ export async function loadScene(files, entryPaths, options = {}) {
                 throw new RangeError(
                   "Cabin path placement exceeds 32-bit float range",
                 );
+              const cabinPathPointItems = points.map((point) => point.info);
+              const cabinPathPointMarkerTriangleStart =
+                geometry.triangles.length / 4 -
+                cabinPathPointItems.length * CABIN_MARKER_TRIANGLE_COUNT;
               models.push({
                 name: "Cabin Paths",
                 cabinPathSource: child.path,
+                cabinPathLinkItems,
+                cabinPathPointItems,
+                cabinPathPointMarkerTriangleStart,
                 vertices,
                 triangles: geometry.triangles,
                 gizmoVisible: true,
@@ -947,7 +962,7 @@ export async function loadScene(files, entryPaths, options = {}) {
               if (markerItems.length) {
                 try {
                   const geometry = generateCabinMarkerMesh(
-                    markerItems.map((item) => item.position),
+                    markerItems,
                     placement,
                   );
                   const modelIndex = models.length;
@@ -961,15 +976,13 @@ export async function loadScene(files, entryPaths, options = {}) {
                     vertices: geometry.vertices,
                     triangles: geometry.triangles,
                     gizmoVisible: true,
-                    materials: [
-                      {
-                        diffuse: [0.2, 0.75, 1, 1],
+                    materials: CABIN_MARKER_COLORS.map((diffuse) => ({
+                        diffuse: [...diffuse],
                         spec: [0, 0, 0],
                         emission: [0, 0, 0],
                         specPower: 0,
                         textureName: "",
-                      },
-                    ],
+                      })),
                     transform: [
                       1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
                     ],
@@ -1167,6 +1180,9 @@ export async function loadScene(files, entryPaths, options = {}) {
       repaintDisposed = true;
       for (const bitmap of repaintBitmaps) bitmap.close();
       repaintBitmaps.clear();
+    },
+    ownsTexture(texture) {
+      return repaintBitmaps.has(texture);
     },
   };
   return {

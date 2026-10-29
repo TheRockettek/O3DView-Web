@@ -588,6 +588,7 @@ export class Renderer {
     this._pointerDown = controls.down;
     this._pointerMove = controls.move;
     this._pointerUp = controls.up;
+    this._keyDown = controls.keyDown;
     this._contextMenu = controls.contextMenu;
     this._wheel = (event) => {
       event.preventDefault();
@@ -611,6 +612,7 @@ export class Renderer {
     this.canvas.addEventListener("pointerup", this._pointerUp);
     this.canvas.addEventListener("pointercancel", this._pointerUp);
     this.canvas.addEventListener("lostpointercapture", this._pointerUp);
+    this.canvas.addEventListener("keydown", this._keyDown);
     this.canvas.addEventListener("contextmenu", this._contextMenu);
     this.canvas.addEventListener("wheel", this._wheel, { passive: false });
     if (typeof ResizeObserver !== "undefined") {
@@ -1144,6 +1146,7 @@ export class Renderer {
       ["pointerup", this._pointerUp],
       ["pointercancel", this._pointerUp],
       ["lostpointercapture", this._pointerUp],
+      ["keydown", this._keyDown],
       ["wheel", this._wheel],
       ["contextmenu", this._contextMenu],
     ])

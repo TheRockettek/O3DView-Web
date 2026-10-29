@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { duplicateLight, encodeInteriorLights } from "../src/light-data.js";
 import {
+  bindSceneVisibilityGroups,
   canContainSceneNode,
   containsSceneNode,
   findSceneNodeParent,
@@ -13,6 +14,7 @@ import {
 import { focusPosition } from "../src/camera-controls.js";
 import {
   CABIN_MARKER_TRIANGLE_COUNT,
+  CABIN_PATH_LINK_TRIANGLE_COUNT,
   cabinPathPointWorldPosition,
   updateCabinMarkerPosition,
 } from "../src/cabin-path.js";
@@ -28,6 +30,7 @@ class Element {
     this.textContent = "";
     this.hidden = false;
     this.dataset = {};
+    this.style = {};
   }
   addEventListener(type, handler) {
     this.listeners[type] = handler;
@@ -35,6 +38,9 @@ class Element {
   replaceChildren(...children) {
     this.children = children;
     this.value = children[0]?.value ?? "";
+  }
+  prepend(...children) {
+    this.children.unshift(...children);
   }
   append(...children) {
     this.children.push(...children);
@@ -88,14 +94,17 @@ test("scene selection and applied material edits reach export; failures appear i
     {
       name: "same.o3d",
       vertices: new Float32Array(8),
+      triangles: new Uint32Array(4),
       materials: [material()],
     },
     {
       name: "same.o3d",
       vertices: new Float32Array(8),
+      triangles: new Uint32Array(4),
       materials: [material()],
     },
   ];
+  const startingModelCount = models.length;
   const lights = [
     {
       variable: "lamp",
@@ -197,8 +206,12 @@ test("scene selection and applied material edits reach export; failures appear i
   let sceneResult = { models, lights, lods, hierarchy, warnings: [] };
   let failCreate = false;
   let failDelete = false;
+  let failSceneDelete = false;
+  let failModelDuplicate = false;
   let failRepaint = false;
   const repaintCalls = [];
+  const duplicateBindings = [];
+  const removalCalls = [];
   const repaint = {
     schemes: ["Blue"],
     ctis: [{ source: "paint.cti", active: true }],
@@ -213,11 +226,36 @@ test("scene selection and applied material edits reach export; failures appear i
       this.schemes.push("Red");
       return { ctis: [cti], warnings: [] };
     },
+    includeDuplicates(pairs) {
+      duplicateBindings.push(...pairs);
+    },
+    removeModels(indices) {
+      removalCalls.push([...indices]);
+    },
+    referencesTexture() {
+      return false;
+    },
+    ownsTexture() {
+      return false;
+    },
     dispose() {},
   };
   const sunUpdates = [];
   const renderer = {
-    setModels() {},
+    _target: [0, 0, 0],
+    _distance: 10,
+    _yaw: Math.PI / 2,
+    _pitch: 0,
+    _viewRadius: 10,
+    _requestFrame() {},
+    setModels(value) {
+      if (failModelDuplicate && value.length > startingModelCount)
+        throw new Error("duplicate failed");
+      if (failSceneDelete && value.length < models.length)
+        throw new Error("model deletion failed");
+    },
+    setModelVisible() {},
+    setSelectedModel() {},
     setLights(value) {
       if (value[0]?.range === 13) throw new Error("invalid light");
       if (failCreate && value.some((light) => light.created))
@@ -245,6 +283,7 @@ test("scene selection and applied material edits reach export; failures appear i
     },
   };
   globalThis.document = document;
+  globalThis.window = { addEventListener() {} };
   globalThis.__appTestDeps = {
     createRenderer: async (canvas) => ({ renderer, canvas, backend: "test" }),
     loadScene: async () => sceneResult,
@@ -276,6 +315,7 @@ test("scene selection and applied material edits reach export; failures appear i
     readDroppedFiles() {},
     MAX_INTERIOR_LIGHTS: 15,
     duplicateLight,
+    bindSceneVisibilityGroups,
     canContainSceneNode,
     containsSceneNode,
     findSceneNodeParent,
@@ -283,6 +323,7 @@ test("scene selection and applied material edits reach export; failures appear i
     reparentSceneNode,
     restoreSceneNodeParent,
     CABIN_MARKER_TRIANGLE_COUNT,
+    CABIN_PATH_LINK_TRIANGLE_COUNT,
     cabinPathPointWorldPosition,
     updateCabinMarkerPosition,
     updateNightStrength() {},
@@ -298,6 +339,7 @@ test("scene selection and applied material edits reach export; failures appear i
           : { index: 1, triangleIndex: 0 })
       );
     },
+    projectWorldPosition: () => ({ x: 30, y: 40 }),
     translateSceneModel: (_renderer, models, index, translation) => {
       models[index].worldTranslation = translation;
     },
@@ -329,9 +371,10 @@ test("scene selection and applied material edits reach export; failures appear i
   try {
     const source = (
       await readFile(new URL("../src/app.js", import.meta.url), "utf8")
-    ).replace(/^import .*;\n/gm, "");
+    ).replace(/^import[\s\S]*?;\r?\n/gm, "");
+    assert.doesNotMatch(source, /^import\s/m);
     const prefix =
-      "const { createRenderer, loadScene, decodeConfiguration, listCommands, collectSceneVariables, updateSceneVariable, changeViewpoint, changeLodVisibility, changeGizmoVisibility, isModelVisible, viewpointAllows, captureDrop, readDroppedFiles, downloadWavefront, downloadO3D, combineSceneModels, MAX_INTERIOR_LIGHTS, duplicateLight, canContainSceneNode, containsSceneNode, findSceneNodeParent, moveSceneNode, reparentSceneNode, restoreSceneNodeParent, CABIN_MARKER_TRIANGLE_COUNT, updateNightStrength, createRepaintSession, enhanceDropdowns, syncDropdown, pickModelHit, translateSceneModel, updateCabinPathPoint, updateCabinPathLink, updateCabinMarkerPosition, focusModels, focusPosition, cabinPathPointWorldPosition } = globalThis.__appTestDeps;\n";
+      "const { createRenderer, loadScene, decodeConfiguration, listCommands, collectSceneVariables, updateSceneVariable, changeViewpoint, changeLodVisibility, changeGizmoVisibility, bindSceneVisibilityGroups, isModelVisible, viewpointAllows, captureDrop, readDroppedFiles, downloadWavefront, downloadO3D, combineSceneModels, MAX_INTERIOR_LIGHTS, duplicateLight, canContainSceneNode, containsSceneNode, findSceneNodeParent, moveSceneNode, reparentSceneNode, restoreSceneNodeParent, CABIN_MARKER_TRIANGLE_COUNT, CABIN_PATH_LINK_TRIANGLE_COUNT, updateNightStrength, createRepaintSession, enhanceDropdowns, syncDropdown, pickModelHit, projectWorldPosition, translateSceneModel, updateCabinPathPoint, updateCabinPathLink, updateCabinMarkerPosition, focusModels, focusPosition, cabinPathPointWorldPosition } = globalThis.__appTestDeps;\n";
     await import(
       `data:text/javascript;base64,${Buffer.from(prefix + source).toString("base64")}`
     );
@@ -339,6 +382,33 @@ test("scene selection and applied material edits reach export; failures appear i
     get("model-files").files = [{ name: "same.o3d" }];
     await get("model-files").emit("change");
     await get("open").emit("click");
+    const modelInspect =
+      get("scene-list").children[0].children[0].children[1].children[0]
+        .children[1];
+    await modelInspect.emit("click");
+    assert.match(get("scene-group-info").textContent, /Model source: same\.o3d/);
+    assert.match(get("scene-group-info").textContent, /Vertices: 1/);
+    assert.match(get("scene-group-info").textContent, /Triangles: 1/);
+    assert.match(get("scene-group-info").textContent, /Materials: 1/);
+    get("show-light-references").checked = true;
+    await get("show-light-references").emit("change");
+    const lightReference = get("light-reference-layer").children[0];
+    assert.equal(lightReference.style.left, "30px");
+    assert.equal(lightReference.style.top, "40px");
+    await lightReference.emit("click");
+    assert.match(get("scene-group-info").textContent, /Type: light/);
+    assert.equal(get("light-select").value, "0");
+    pickHit = { index: 0, triangleIndex: 0 };
+    const groupPointer = {
+      pointerId: 7,
+      button: 0,
+      clientX: 20,
+      clientY: 25,
+      altKey: true,
+    };
+    await get("viewport").emit("pointerdown", groupPointer);
+    await get("viewport").emit("pointerup", groupPointer);
+    assert.match(get("scene-group-info").textContent, /Type: configuration/);
     const cabinInspect =
       get("scene-list").children[0].children[0].children[1].children[3]
         .children[0].children[1].children[0].children[1];
@@ -689,6 +759,14 @@ test("scene selection and applied material edits reach export; failures appear i
     await get("lod-apply").emit("click");
     assert.deepEqual(calls.shift(), { lodChanges: [[lods[0], false]] });
     assert.equal(lods[0].visible, false);
+    get("lod-radius").value = "0.8";
+    await get("lod-apply").emit("click");
+    assert.deepEqual(calls.shift(), { lodChanges: [[lods[0], true]] });
+    assert.equal(lods[0].visible, true);
+    get("lod-radius").value = "0.5";
+    await get("lod-apply").emit("click");
+    assert.deepEqual(calls.shift(), { lodChanges: [[lods[0], false]] });
+    assert.equal(lods[0].visible, false);
     get("scene-group-lod-radius").value = "0.3";
     await get("scene-group-lod-form").emit("submit");
     assert.equal(lods[0].visible, false);
@@ -864,6 +942,45 @@ test("scene selection and applied material edits reach export; failures appear i
     });
     const firstRecord = makeCabinRecord("Seat 0", 1);
     const secondRecord = makeCabinRecord("Seat 1", 2);
+    const firstPoint = {
+      kind: "path point",
+      source: "people.cfg",
+      line: 1,
+      index: 4,
+      position: [0, 0, 0],
+      pathState: { paths: { points: [[0, 0, 0], [1, 0, 0]] }, modelIndex: 1 },
+    };
+    const secondPoint = {
+      ...firstPoint,
+      line: 5,
+      index: 8,
+      position: [1, 0, 0],
+    };
+    const firstLinkValue = {
+      a: 0,
+      b: 1,
+      oneWay: true,
+      roomHeight: 1.5,
+      stepSound: 0,
+      line: 9,
+    };
+    const firstLink = {
+      kind: "path link",
+      source: "people.cfg",
+      line: 9,
+      index: 0,
+      link: firstLinkValue,
+      pathState: {
+        paths: {
+          points: [
+            [0, 0, 0],
+            [1, 0, 0],
+          ],
+          links: [firstLinkValue],
+        },
+        modelIndex: 1,
+      },
+    };
     const markerModel = {
       name: "Cabin markers",
       vertices: new Float32Array(8),
@@ -871,10 +988,19 @@ test("scene selection and applied material edits reach export; failures appear i
       materials: [material()],
       cabinMarkerItems: [firstRecord, secondRecord],
     };
+    const pathModel = {
+      name: "Cabin Paths",
+      vertices: new Float32Array(8),
+      triangles: new Uint32Array(4),
+      materials: [material()],
+      cabinPathLinkItems: [firstLink],
+      cabinPathPointItems: [firstPoint, secondPoint],
+      cabinPathPointMarkerTriangleStart: 3,
+    };
     firstRecord.markerModelIndex = 0;
     secondRecord.markerModelIndex = 0;
     sceneResult = {
-      models: [markerModel],
+      models: [markerModel, pathModel],
       lights: [],
       lods: [],
       warnings: [],
@@ -883,6 +1009,36 @@ test("scene selection and applied material edits reach export; failures appear i
           type: "configuration",
           name: "vehicle.bus",
           children: [
+            {
+              type: "cabin-points",
+              name: "Cabin path points",
+              children: [
+                {
+                  type: "cabin-item",
+                  name: "Path point 4",
+                  info: firstPoint,
+                  children: [],
+                },
+                {
+                  type: "cabin-item",
+                  name: "Path point 8",
+                  info: secondPoint,
+                  children: [],
+                },
+              ],
+            },
+            {
+              type: "cabin-links",
+              name: "Cabin path links",
+              children: [
+                {
+                  type: "cabin-item",
+                  name: "Path link 0",
+                  info: firstLink,
+                  children: [],
+                },
+              ],
+            },
             {
               type: "cabin",
               name: "Passenger Cabin",
@@ -907,6 +1063,12 @@ test("scene selection and applied material edits reach export; failures appear i
                 },
               ],
             },
+            {
+              type: "cabin-path",
+              name: "people.cfg",
+              modelIndex: 1,
+              children: [],
+            },
           ],
         },
       ],
@@ -923,8 +1085,150 @@ test("scene selection and applied material edits reach export; failures appear i
     await get("viewport").emit("pointerup", markerPointer);
     assert.match(get("cabin-info").textContent, /^Seat 1\n/);
     assert.equal(get("cabin-seat-form").hidden, false);
+    pickHit = {
+      index: 1,
+      triangleIndex: 3 + CABIN_MARKER_TRIANGLE_COUNT,
+    };
+    const pathPointer = { ...markerPointer, clientX: markerPointer.clientX + 1 };
+    await get("viewport").emit("pointerdown", pathPointer);
+    await get("viewport").emit("pointerup", pathPointer);
+    assert.match(get("cabin-info").textContent, /^Path point 8\n/);
+    assert.equal(get("cabin-point-form").hidden, false);
+    pickHit = {
+      index: 1,
+      triangleIndex: CABIN_PATH_LINK_TRIANGLE_COUNT - 1,
+    };
+    const linkPointer = { ...pathPointer, clientX: pathPointer.clientX + 1 };
+    await get("viewport").emit("pointerdown", linkPointer);
+    await get("viewport").emit("pointerup", linkPointer);
+    assert.match(get("cabin-info").textContent, /^Path link 0\n/);
+    assert.equal(get("focus-scene-group").disabled, false);
+    assert.equal(get("focus-scene-group").textContent, "Focus cabin link");
+    await get("focus-scene-group").emit("click");
+    assert.deepEqual(focusedPositions.at(-1), [0.5, 0, 0]);
+    get("material-model").value = "0";
+    await get("material-model").emit("change");
+    const originalDiffuse = models[0].materials[0].diffuse;
+    failModelDuplicate = true;
+    await get("duplicate-model").emit("click");
+    assert.equal(models.length, 2);
+    assert.match(get("status").textContent, /Unable to duplicate model: duplicate failed/);
+    failModelDuplicate = false;
+    await get("duplicate-model").emit("click");
+    assert.equal(models.length, 3);
+    assert.equal(models[2].name, `${models[0].name} copy`);
+    assert.notEqual(models[2].materials[0], models[0].materials[0]);
+    assert.notEqual(models[2].materials[0].diffuse, originalDiffuse);
+    assert.equal(get("material-model").value, "2");
+    assert.deepEqual(duplicateBindings, [[0, 2]]);
+    assert.match(
+      get("status").textContent,
+      /Model duplicated for this scene/,
+    );
+
+    const root = hierarchy[0],
+      modelNode = root.children.find((node) => node.modelIndex === 0),
+      lodNode = root.children.find((node) => node.type === "lod");
+    root.children.splice(root.children.indexOf(modelNode), 1);
+    root.children.splice(root.children.indexOf(lodNode), 1);
+    const batchGroup = {
+      type: "group",
+      name: "Model-only batch",
+      children: [modelNode, lodNode],
+    };
+    root.children.unshift(batchGroup);
+    models[1].lod = lods[0];
+    const findElement = (element, predicate) => {
+      if (predicate(element)) return element;
+      for (const child of element.children) {
+        const found = findElement(child, predicate);
+        if (found) return found;
+      }
+      return null;
+    };
+    const groupSelect = findElement(
+      get("scene-list"),
+      (element) => element.ariaLabel === "Select group Model-only batch",
+    );
+    assert.ok(groupSelect);
+    await groupSelect.emit("click");
+    assert.equal(get("duplicate-group").disabled, false);
+    await get("duplicate-group").emit("click");
+    assert.equal(models.length, 5);
+    assert.equal(models[3].name, `${models[0].name} copy`);
+    assert.equal(models[4].name, `${models[1].name} copy`);
+    const batchCopy = root.children.find(
+      (node) => node.name === "Model-only batch copy",
+    );
+    assert.ok(batchCopy);
+    assert.notEqual(batchCopy.children[1].lod, lods[0]);
+    assert.equal(models[4].lod, batchCopy.children[1].lod);
+    const sourceExport = findElement(
+      get("scene-list"),
+      (element) =>
+        element.ariaLabel ===
+        "Select Model-only batch for group export",
+    );
+    const copyExport = findElement(
+      get("scene-list"),
+      (element) =>
+        element.ariaLabel ===
+        "Select Model-only batch copy for group export",
+    );
+    assert.ok(sourceExport);
+    assert.ok(copyExport);
+    assert.notEqual(
+      sourceExport.dataset.exportGroup,
+      copyExport.dataset.exportGroup,
+    );
+    assert.deepEqual(duplicateBindings, [
+      [0, 2],
+      [0, 3],
+      [1, 4],
+    ]);
+    assert.match(get("status").textContent, /Group duplicated with 2 models/);
+    const mixedGroupSelect = findElement(
+      get("scene-list"),
+      (element) => element.ariaLabel === "Select group model.cfg",
+    );
+    assert.ok(mixedGroupSelect);
+    await mixedGroupSelect.emit("click");
+    assert.equal(get("duplicate-group").disabled, true);
+    assert.equal(get("delete-scene-node").disabled, true);
+    const batchGroupSelect = findElement(
+      get("scene-list"),
+      (element) => element.ariaLabel === "Select group Model-only batch",
+    );
+    assert.ok(batchGroupSelect);
+    await batchGroupSelect.emit("click");
+    assert.equal(get("delete-scene-node").disabled, false);
+    failSceneDelete = true;
+    await get("delete-scene-node").emit("click");
+    assert.equal(models.length, 5);
+    assert.ok(root.children.includes(batchGroup));
+    assert.match(
+      get("status").textContent,
+      /Unable to delete scene item: model deletion failed/,
+    );
+    failSceneDelete = false;
+    await get("delete-scene-node").emit("click");
+    assert.equal(models.length, 3);
+    assert.equal(root.children.includes(batchGroup), false);
+    assert.equal(models[0].name, `${models[0].sourceName} copy`);
+    assert.equal(models[2].lod, batchCopy.children[1].lod);
+    assert.equal(get("material-model").value, "1");
+    assert.deepEqual(removalCalls, [[0, 1]]);
+    assert.match(get("status").textContent, /Group removed with 2 models/);
+    const rootSelect = findElement(
+      get("scene-list"),
+      (element) => element.ariaLabel === "Select group model.cfg",
+    );
+    assert.ok(rootSelect);
+    await rootSelect.emit("click");
+    assert.equal(get("delete-scene-node").disabled, true);
   } finally {
     delete globalThis.document;
+    delete globalThis.window;
     delete globalThis.__appTestDeps;
   }
 });

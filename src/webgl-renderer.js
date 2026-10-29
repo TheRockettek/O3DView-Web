@@ -528,6 +528,7 @@ export class WebGLRenderer {
     this._pointerDown = controls.down;
     this._pointerMove = controls.move;
     this._pointerUp = controls.up;
+    this._keyDown = controls.keyDown;
     this._contextMenu = controls.contextMenu;
     this._wheel = (event) => {
       event.preventDefault();
@@ -567,6 +568,7 @@ export class WebGLRenderer {
       ["pointerup", this._pointerUp],
       ["pointercancel", this._pointerUp],
       ["lostpointercapture", this._pointerUp],
+      ["keydown", this._keyDown],
       ["wheel", this._wheel],
       ["contextmenu", this._contextMenu],
     ];
