@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><link rel="stylesheet" href="../style.css"></head>
+<body>
+<main><aside class="sidebar">
+  <label for="choices">Choices</label>
+  <select id="choices">
+    <option value="same">First entry</option>
+    <option value="same">Second entry</option>
+    <option disabled>Disabled option</option>
+    <optgroup label="Group" disabled><option>Disabled group</option></optgroup>
+    <option value="last">Last choice</option>
+  </select>
+  <fieldset id="fieldset"><label for="other">Other</label><select id="other"><option>One</option><option>Two</option></select></fieldset>
+  <button id="outside">Outside</button>
+</aside></main>
+<script type="module" src="./dropdowns-check.js"></script>
+</body>
+</html>

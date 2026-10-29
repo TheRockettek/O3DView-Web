@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#131c29">
+  <meta name="description" content="An offline-capable WebGPU and WebGL viewer for OMSI models.">
+  <title>O3DView Web</title>
+  <link rel="icon" type="image/svg+xml" href="./icon.svg">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><h1>O3DView <span>Web</span></h1><p>OMSI model viewer · <span id="renderer-status">Starting renderer…</span></p></div>
+    <p id="offline-status" role="status">Preparing offline support…</p>
+  </header>
+  <main>
+    <aside class="sidebar">
+      <section>
+        <h2>Open a model</h2>
+        <p>Choose or drop model files, or a folder containing a model configuration and its referenced files. Files stay on your device.</p>
+        <label class="button" for="model-files">Choose model files</label>
+        <input id="model-files" type="file" accept=".o3d,.rdy,.cfg,.sco,.bus,.ovh,.cti,.sli,.map,.obj,.mtl,.dds,.tga,.png,.jpg,.jpeg,.bmp,.gif,.webp" multiple>
+        <label class="button secondary" for="folder-files">Choose model folder</label>
+        <input id="folder-files" type="file" webkitdirectory multiple>
+        <label for="entry">Model, configuration, or map tile</label>
+        <select id="entry" disabled><option>No files selected</option></select>
+        <label><input id="allow-empty-scene" type="checkbox"> Open configurations without loaded models</label>
+        <button id="open" disabled>Open selected</button>
+      </section>
+      <section>
+        <h2>Scene</h2>
+        <p id="scene-summary">No model loaded.</p>
+        <label for="scene-search">Filter scene</label>
+        <input id="scene-search" type="search" placeholder="Search scene names">
+        <label for="viewpoint">Viewpoint</label>
+        <select id="viewpoint" disabled>
+          <option value="0">All viewpoints</option>
+          <option value="1">Exterior</option>
+          <option value="2">Interior</option>
+          <option value="4">AI</option>
+        </select>
+        <ul id="scene-list"></ul>
+        <button id="fit" class="secondary" disabled>Fit view</button>
+        <button id="focus-model" class="secondary" disabled>Focus selected model</button>
+        <label><input id="highlight-selection" type="checkbox" checked disabled> Highlight selected model</label>
+        <label><input id="fullbright" type="checkbox" disabled> Fullbright</label>
+        <label><input id="wireframe" type="checkbox" disabled> Wireframe</label>
+        <label><input id="cull-backfaces" type="checkbox" disabled> Cull back faces (desktop style)</label>
+        <label><input id="show-gizmos" type="checkbox" checked disabled> Show spline, path and cabin gizmos</label>
+        <label for="global-night-strength">Global night map strength</label>
+        <input id="global-night-strength" type="number" step="0.05" min="0" max="2" value="0" disabled>
+      </section>
+      <section>
+        <h2>Level of detail</h2>
+        <p>LOD groups start visible. Apply a view radius to update all groups, or toggle groups individually.</p>
+        <label for="lod-radius">LOD view radius (0–1)</label>
+        <input id="lod-radius" type="number" min="0" max="1" step="any" value="1" disabled>
+        <button id="lod-apply" class="secondary" disabled>Apply LOD radius</button>
+        <ul id="lod-list"></ul>
+      </section>
+      <section>
+        <h2>Lights</h2>
+        <label><input id="desktop-sun" type="checkbox" disabled> Use editable desktop-style sun</label>
+        <form id="sun-form">
+          <fieldset id="sun-fields" disabled>
+            <label><input id="sun-on" type="checkbox" checked> Sun on</label>
+            <label for="sun-direction">Direction (X Y Z)</label>
+            <input id="sun-direction" value="0 -1 0" required>
+            <label for="sun-color">Color (R G B)</label>
+            <input id="sun-color" value="0.9 0.9 0.9" required>
+            <label for="sun-ambient">Ambient (R G B)</label>
+            <input id="sun-ambient" value="0.1 0.1 0.1" required>
+            <label for="sun-intensity">Intensity</label>
+            <input id="sun-intensity" type="number" step="any" value="1" required>
+            <button type="submit">Apply sun</button>
+          </fieldset>
+        </form>
+        <button id="create-light" class="secondary" disabled>Create directional light</button>
+        <button id="create-point-light" class="secondary" disabled>Create point light</button>
+        <p id="light-summary">No lights.</p>
+        <ul id="light-list"></ul>
+        <label for="light-select">Inspect light</label>
+        <select id="light-select" disabled><option>No lights</option></select>
+        <button id="delete-light" class="secondary" disabled>Delete selected light</button>
+        <form id="light-form">
+          <fieldset id="light-fields" disabled>
+            <label for="light-name">Scene name</label>
+            <input id="light-name" required>
+            <label for="light-mode">Type</label>
+            <select id="light-mode">
+              <option value="point">Point</option>
+              <option value="directional">Directional</option>
+              <option value="ambient">Ambient only</option>
+              <option value="spot">Spot (not rendered by desktop)</option>
+            </select>
+            <label for="light-position">World position (X Y Z)</label>
+            <input id="light-position" required>
+            <label for="light-direction">Direction (X Y Z)</label>
+            <input id="light-direction" required>
+            <label for="light-color">Color (R G B)</label>
+            <input id="light-color" required>
+            <label for="light-ambient">Ambient (R G B)</label>
+            <input id="light-ambient" required>
+            <label for="light-range">Range</label>
+            <input id="light-range" type="number" step="any" required>
+            <label for="light-intensity">Intensity</label>
+            <input id="light-intensity" type="number" step="any" required>
+            <button type="submit">Apply light</button>
+          </fieldset>
+        </form>
+      </section>
+      <section>
+        <h2>Repaints</h2>
+        <p>Choose a colour scheme and enable the CTI files to apply. Additional CTI files can be selected with their textures.</p>
+        <label class="button secondary" for="repaint-files">Add CTI files and textures</label>
+        <input id="repaint-files" type="file" accept=".cti,.dds,.tga,.png,.jpg,.jpeg,.bmp,.gif,.webp" multiple disabled>
+        <label class="button secondary" for="repaint-folder">Add repaint folder</label>
+        <input id="repaint-folder" type="file" webkitdirectory multiple disabled>
+        <ul id="repaint-file-list"></ul>
+        <label for="repaint-select">Colour scheme</label>
+        <select id="repaint-select" disabled><option>Original textures</option></select>
+      </section>
+      <section>
+        <h2>Configuration viewer</h2>
+        <p>Inspect a selected configuration file and its commands. This view does not change the file.</p>
+        <label for="config-file">Configuration file</label>
+        <select id="config-file" disabled><option>No configuration files selected</option></select>
+        <label for="config-command">Command</label>
+        <select id="config-command" disabled><option>No commands</option></select>
+        <label for="config-text">File contents</label>
+        <textarea id="config-text" readonly spellcheck="false" aria-label="Configuration file contents"></textarea>
+      </section>
+      <section>
+        <h2>Scene variables</h2>
+        <p>Manually adjust shared OMSI material and visibility variables. Scripts are not evaluated.</p>
+        <label><input id="bind-light-variables" type="checkbox" disabled> Bind interior-light intensity variables (optional)</label>
+        <form id="variable-form">
+          <label for="variable-select">Variable</label>
+          <select id="variable-select" disabled><option>No scene variables</option></select>
+          <label for="variable-value">Value</label>
+          <input id="variable-value" type="number" step="any" required disabled aria-describedby="variable-hint">
+          <p id="variable-hint" class="muted"></p>
+          <button id="variable-apply" type="submit" disabled>Apply variable</button>
+        </form>
+      </section>
+      <section>
+        <h2>Scene group inspector</h2>
+        <p>Inspect a group in the scene tree to rename it for this scene.</p>
+        <pre id="scene-group-info">No group selected.</pre>
+        <button id="focus-scene-group" type="button" class="secondary" disabled>Focus group</button>
+        <form id="scene-group-form">
+          <fieldset id="scene-group-fields" disabled>
+            <label for="scene-group-name">Scene group name</label>
+            <input id="scene-group-name" required>
+            <button type="submit" class="secondary">Rename group</button>
+          </fieldset>
+        </form>
+        <form id="scene-group-lod-form" hidden>
+          <fieldset id="scene-group-lod-fields" disabled>
+            <label for="scene-group-lod-radius">LOD threshold</label>
+            <input id="scene-group-lod-radius" type="number" step="any" required>
+            <button type="submit" class="secondary">Apply LOD threshold</button>
+          </fieldset>
+        </form>
+      </section>
+      <section>
+        <h2>Cabin inspector</h2>
+        <p>Select a cabin item or path point in the scene tree to inspect its source data.</p>
+        <pre id="cabin-info">No cabin item selected.</pre>
+        <form id="cabin-point-form" hidden>
+          <fieldset id="cabin-point-fields" disabled>
+            <label for="cabin-point-position">Path point OMSI position (X Y Z)</label>
+            <input id="cabin-point-position" required>
+            <button type="submit" class="secondary">Apply path point</button>
+          </fieldset>
+        </form>
+        <form id="cabin-link-form" hidden>
+          <fieldset id="cabin-link-fields" disabled>
+            <label for="cabin-link-a">First path point index</label>
+            <input id="cabin-link-a" type="number" step="1" required>
+            <label for="cabin-link-b">Second path point index</label>
+            <input id="cabin-link-b" type="number" step="1" required>
+            <label><input id="cabin-link-oneway" type="checkbox"> One-way</label>
+            <label for="cabin-link-room">Room height</label>
+            <input id="cabin-link-room" type="number" step="any" required>
+            <label for="cabin-link-sound">Step sound</label>
+            <input id="cabin-link-sound" type="number" step="1" required>
+            <button type="submit" class="secondary">Apply path link</button>
+          </fieldset>
+        </form>
+      </section>
+      <section>
+        <h2>Material inspector</h2>
+        <label for="material-model">Model</label>
+        <select id="material-model" disabled><option>No model loaded</option></select>
+        <p id="model-source" class="muted"></p>
+        <form id="model-name-form">
+          <fieldset id="model-name-fields" disabled>
+            <label for="model-name">Scene name</label>
+            <input id="model-name" required>
+            <button type="submit" class="secondary">Rename model</button>
+          </fieldset>
+        </form>
+        <form id="model-translation-form">
+          <fieldset id="model-translation-fields" disabled>
+            <label for="model-translation">World translation from loaded placement (X Y Z)</label>
+            <input id="model-translation" required>
+            <button type="submit" class="secondary">Apply translation</button>
+          </fieldset>
+        </form>
+        <label for="material-select">Material</label>
+        <select id="material-select" disabled><option>No materials</option></select>
+        <p id="material-texture" class="muted"></p>
+        <p id="material-maps" class="muted"></p>
+        <form id="material-form">
+          <fieldset id="material-fields" disabled>
+            <legend>RGBA / RGB values</legend>
+            <label for="material-diffuse">Diffuse (R G B A)</label>
+            <input id="material-diffuse" required>
+            <label for="material-spec">Specular (R G B)</label>
+            <input id="material-spec" required>
+            <label for="material-emission">Emission (R G B)</label>
+            <input id="material-emission" required>
+            <label for="material-power">Specular power</label>
+            <input id="material-power" type="number" step="any" min="0" required>
+            <label for="material-night-strength">Night map strength</label>
+            <input id="material-night-strength" type="number" step="any" min="0" required>
+            <label for="material-light-strength">Light map strength</label>
+            <input id="material-light-strength" type="number" step="any" min="0" required>
+            <label for="material-bump-strength">Bump map strength</label>
+            <input id="material-bump-strength" type="number" step="any" required>
+            <label for="material-env-strength">Environment map strength</label>
+            <input id="material-env-strength" type="number" step="any" required>
+            <label for="material-alpha">Alpha mode</label>
+            <select id="material-alpha">
+              <option value="auto">Automatic</option>
+              <option value="0">Opaque</option>
+              <option value="1">Cutout</option>
+              <option value="2">Blend</option>
+            </select>
+            <label><input id="material-nozcheck" type="checkbox"> Disable depth test</label>
+            <label><input id="material-nozwrite" type="checkbox"> Disable depth write</label>
+            <button type="submit">Apply material</button>
+          </fieldset>
+        </form>
+        <p class="muted">Changes affect the current scene only; they are not saved to the source file.</p>
+      </section>
+      <section>
+        <h2>Export model</h2>
+        <p>Export the model selected in the material inspector, including applied material edits. For Wavefront, download both OBJ and MTL into the same folder.</p>
+        <button id="export-obj" class="secondary" disabled>Download OBJ</button>
+        <button id="export-mtl" class="secondary" disabled>Download MTL</button>
+        <p>Export all loaded models as one scene, including hidden models and baked placements.</p>
+        <button id="export-scene-obj" class="secondary" disabled>Download scene OBJ</button>
+        <button id="export-scene-mtl" class="secondary" disabled>Download scene MTL</button>
+        <p id="export-group-label">Choose a group in the scene tree to export its models.</p>
+        <button id="export-group-obj" class="secondary" disabled>Download group OBJ</button>
+        <button id="export-group-mtl" class="secondary" disabled>Download group MTL</button>
+        <label for="export-o3d-format">O3D format</label>
+        <select id="export-o3d-format" disabled>
+          <option value="preserve">Original version and options</option>
+          <option value="v7">Version 7, long indices</option>
+          <option value="v3">Version 3, short indices</option>
+        </select>
+        <button id="export-o3d" class="secondary" disabled>Download O3D</button>
+        <p class="muted">Textures are referenced but not included. Other material maps and OMSI-specific settings are not exported.</p>
+      </section>
+      <section>
+        <h2>Controls</h2>
+        <p>Left-drag to orbit · right- or middle-drag to pan · scroll to zoom · F to focus the selected model · Fit view to recenter</p>
+        <p class="muted">This is an early port. Some OMSI formats, materials and editor features are not yet supported.</p>
+      </section>
+    </aside>
+    <section class="viewport" aria-label="3D model viewport">
+      <canvas id="viewport" aria-label="3D model" tabindex="0"></canvas>
+      <div id="placeholder" class="placeholder">Choose a model to begin</div>
+    </section>
+  </main>
+  <footer>
+    <div id="status" role="status" aria-live="polite">Starting renderer…</div>
+    <details id="warning-details" hidden><summary>Load warnings</summary><ul id="warnings"></ul></details>
+  </footer>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
