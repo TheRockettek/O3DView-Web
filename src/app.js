@@ -9,20 +9,36 @@ import {
   changeViewpoint,
   changeLodVisibility,
   changeGizmoVisibility,
+  bindSceneVisibilityGroups,
+  changeSceneGroupVisibility,
   isModelVisible,
   viewpointAllows,
 } from "./scene-visibility.js";
 import { captureDrop, readDroppedFiles } from "./drop-files.js";
 import { downloadWavefront, combineSceneModels } from "./obj-export.js";
 import { downloadO3D } from "./o3d-write.js";
-import { MAX_INTERIOR_LIGHTS } from "./light-data.js";
+import { duplicateLight, MAX_INTERIOR_LIGHTS } from "./light-data.js";
 import { updateNightStrength } from "./global-materials.js";
 import { createRepaintSession } from "./repaint-session.js";
 import { enhanceDropdowns, syncDropdown } from "./dropdowns.js";
-import { pickModel } from "./picking.js";
+import { pickModelHit } from "./picking.js";
 import { translateSceneModel } from "./scene-transforms.js";
-import { updateCabinPathPoint, updateCabinPathLink } from "./cabin-path.js";
-import { focusModels } from "./camera-controls.js";
+import {
+  CABIN_MARKER_TRIANGLE_COUNT,
+  cabinPathPointWorldPosition,
+  updateCabinMarkerPosition,
+  updateCabinPathPoint,
+  updateCabinPathLink,
+} from "./cabin-path.js";
+import { focusModels, focusPosition } from "./camera-controls.js";
+import {
+  canContainSceneNode,
+  containsSceneNode,
+  findSceneNodeParent,
+  moveSceneNode,
+  reparentSceneNode,
+  restoreSceneNodeParent,
+} from "./scene-hierarchy.js";
 
 enhanceDropdowns();
 const byId = (id) => document.getElementById(id);
@@ -300,6 +316,11 @@ function selectModel(index) {
   try {
     renderer.setSelectedModel(index);
     selectedModel = index;
+    const node = findSceneModelNode(index);
+    if (node) {
+      selectedSceneGroup = node;
+      showSceneGroupInspector();
+    }
     materialModel.value = String(index);
     syncDropdown(materialModel);
     showModelMaterials();
@@ -458,6 +479,58 @@ byId("create-point-light").addEventListener("click", () =>
   createLight("point"),
 );
 
+function findSceneLightNode(index, nodes = sceneHierarchy) {
+  for (const node of nodes) {
+    if (node.type === "light" && node.lightIndex === index) return node;
+    const found = findSceneLightNode(index, node.children || []);
+    if (found) return found;
+  }
+  return null;
+}
+
+byId("duplicate-light").addEventListener("click", () => {
+  const index = Number(byId("light-select").value);
+  const source = sceneLights[index];
+  if (!renderer || renderer.error || repaintApplying || !source) return;
+  try {
+    const sourceNode = findSceneLightNode(index);
+    const location = sourceNode
+      ? findSceneNodeParent(sceneHierarchy, sourceNode)
+      : null;
+    if (!sourceNode || !location)
+      throw new Error("The selected light is missing from the scene tree.");
+    const duplicate = duplicateLight(source, sceneLights);
+    renderer.setLights([...sceneLights, duplicate]);
+    sceneLights.push(duplicate);
+    const duplicateIndex = sceneLights.length - 1;
+    const duplicateNode = {
+      type: "light",
+      name: duplicate.name,
+      lightIndex: duplicateIndex,
+      children: [],
+    };
+    location.siblings.splice(
+      location.siblings.indexOf(sourceNode) + 1,
+      0,
+      duplicateNode,
+    );
+    selectedSceneGroup = duplicateNode;
+    showLights();
+    byId("light-select").value = String(duplicateIndex);
+    syncDropdown(byId("light-select"));
+    showLightInspector();
+    showSceneGroupInspector();
+    showSceneList();
+    status.textContent =
+      duplicateIndex >= MAX_INTERIOR_LIGHTS
+        ? `Light duplicated but not rendered: only the first ${MAX_INTERIOR_LIGHTS} lights are supported.`
+        : "Light duplicated for this scene. Source files are unchanged.";
+  } catch (error) {
+    console.error("Unable to duplicate light", error);
+    status.textContent = `Unable to duplicate light: ${error.message}`;
+  }
+});
+
 function showLightMode() {
   byId("light-direction").disabled = !["directional", "spot"].includes(
     byId("light-mode").value,
@@ -468,6 +541,8 @@ function showLightInspector() {
   const light = sceneLights[Number(byId("light-select").value)];
   byId("light-fields").disabled = !light || !!renderer?.error;
   byId("delete-light").disabled =
+    !light || !!renderer?.error || repaintApplying;
+  byId("duplicate-light").disabled =
     !light || !!renderer?.error || repaintApplying;
   if (!light) return;
   byId("light-name").value = light.name || light.variable || "(unnamed)";
@@ -482,7 +557,10 @@ function showLightInspector() {
   byId("light-intensity").value = String(light.intensity ?? 1);
 }
 
-byId("light-select").addEventListener("change", showLightInspector);
+byId("light-select").addEventListener("change", () => {
+  showLightInspector();
+  showSceneList();
+});
 byId("light-mode").addEventListener("change", showLightMode);
 function removeHierarchyLight(nodes, index) {
   for (let i = nodes.length - 1; i >= 0; i--) {
@@ -500,10 +578,15 @@ byId("delete-light").addEventListener("click", () => {
   if (!renderer || renderer.error || repaintApplying || !sceneLights[index])
     return;
   try {
+    const removedNode = findSceneLightNode(index);
     const next = sceneLights.filter((_light, i) => i !== index);
     renderer.setLights(next);
     sceneLights.splice(0, sceneLights.length, ...next);
     removeHierarchyLight(sceneHierarchy, index);
+    if (selectedSceneGroup === removedNode) {
+      selectedSceneGroup = null;
+      showSceneGroupInspector();
+    }
     byId("bind-light-variables").disabled = !sceneLights.length;
     showVariables(sceneModels, true);
     showLights();
@@ -681,6 +764,7 @@ async function applyRepaint(value) {
   repaintApplying = true;
   showRepaintFiles();
   byId("delete-light").disabled = true;
+  byId("duplicate-light").disabled = true;
   byId("bind-light-variables").disabled = true;
   status.textContent = "Applying repaint…";
   try {
@@ -728,6 +812,8 @@ async function applyRepaint(value) {
       byId("bind-light-variables").disabled =
         !sceneLights.length || !!renderer?.error;
       byId("delete-light").disabled = !sceneLights.length || !!renderer?.error;
+      byId("duplicate-light").disabled =
+        !sceneLights[Number(byId("light-select").value)] || !!renderer?.error;
       showRepaintFiles();
     }
   }
@@ -899,7 +985,40 @@ function showSceneList() {
     !query ||
     labelFor(node).toLocaleLowerCase().includes(query) ||
     node.children.some(matches);
-  function renderNode(node, container, parentMatches = false) {
+  function addOrderControls(container, node, siblings) {
+    const index = siblings.indexOf(node);
+    const controls = document.createElement("span");
+    controls.className = "scene-order-controls";
+    for (const [direction, text] of [
+      [-1, "Up"],
+      [1, "Down"],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "scene-select scene-order-button";
+      button.textContent = text;
+      button.ariaLabel = `Move ${labelFor(node)} ${text.toLowerCase()}`;
+      button.disabled =
+        !!query ||
+        index + direction < 0 ||
+        index + direction >= siblings.length;
+      button.title = query
+        ? "Clear the scene filter to reorder siblings."
+        : `Move ${labelFor(node)} ${text.toLowerCase()}`;
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        try {
+          if (moveSceneNode(siblings, node, direction)) showSceneList();
+        } catch (error) {
+          console.error("Unable to reorder scene node", error);
+          status.textContent = `Unable to reorder scene node: ${error.message}`;
+        }
+      });
+      controls.append(button);
+    }
+    container.append(controls);
+  }
+  function renderNode(node, container, siblings, parentMatches = false) {
     if (!parentMatches && !matches(node)) return;
     const text = labelFor(node);
     if (
@@ -944,11 +1063,43 @@ function showSceneList() {
       } else {
         summary.textContent = text;
       }
+      const groupModels = descendantModels(node);
+      if (node.type !== "lod" && groupModels.length) {
+        const visibility = document.createElement("input");
+        visibility.type = "checkbox";
+        visibility.checked = node.visible !== false;
+        visibility.disabled = !!renderer?.error;
+        visibility.ariaLabel = `Show descendant models in ${text}`;
+        visibility.addEventListener("click", (event) =>
+          event.stopPropagation(),
+        );
+        visibility.addEventListener("change", () => {
+          try {
+            changeSceneGroupVisibility(
+              renderer,
+              sceneModels,
+              sceneVisibility,
+              configVisibility,
+              viewpoint,
+              node,
+              visibility.checked,
+            );
+            showSceneList();
+          } catch (error) {
+            visibility.checked = node.visible !== false;
+            console.error("Unable to change scene group visibility", error);
+            status.textContent = `Unable to change scene group visibility: ${error.message}`;
+          }
+        });
+        summary.prepend(visibility);
+      }
       const inspect = document.createElement("button");
       inspect.type = "button";
       inspect.className = "scene-select scene-group-select";
-      inspect.textContent = "Inspect";
-      inspect.ariaLabel = `Inspect group ${text}`;
+      const selected = selectedSceneGroup === node;
+      inspect.textContent = selected ? "Selected" : "Select";
+      inspect.ariaLabel = `Select group ${text}`;
+      inspect.ariaPressed = String(selected);
       inspect.disabled = !!renderer?.error;
       node.inspectorKey ??= nextGroupId++;
       inspect.dataset.inspectGroup = String(node.inspectorKey);
@@ -962,7 +1113,6 @@ function showSceneList() {
           ?.focus();
       });
       summary.append(inspect);
-      const groupModels = descendantModels(node);
       if (groupModels.length) {
         const select = document.createElement("button");
         select.type = "button";
@@ -987,11 +1137,13 @@ function showSceneList() {
         });
         summary.append(select);
       }
+      addOrderControls(summary, node, siblings);
       const children = document.createElement("ul");
       for (const child of node.children)
         renderNode(
           child,
           children,
+          node.children,
           parentMatches ||
             (!!query && text.toLocaleLowerCase().includes(query)),
         );
@@ -1007,13 +1159,20 @@ function showSceneList() {
       const select = document.createElement("button");
       select.type = "button";
       select.className = "scene-select";
-      select.textContent = "Inspect";
+      const selected = selectedCabinItem === node;
+      select.textContent = selected ? "Selected" : "Inspect";
       select.ariaLabel = `Inspect ${text}`;
+      select.ariaPressed = String(selected);
+      node.selectionKey ??= nextGroupId++;
+      select.dataset.cabinNode = String(node.selectionKey);
       select.addEventListener("click", () => {
-        selectedCabinItem = node;
-        showCabinInspector();
+        selectCabinItemNode(node);
+        sceneList
+          .querySelector?.(`[data-cabin-node="${node.selectionKey}"]`)
+          ?.focus();
       });
       item.append(label, select);
+      addOrderControls(item, node, siblings);
       container.append(item);
       return;
     }
@@ -1039,16 +1198,26 @@ function showSceneList() {
       const select = document.createElement("button");
       select.type = "button";
       select.className = "scene-select";
-      select.textContent = "Inspect";
-      select.ariaLabel = `Inspect ${text}`;
+      const selected = Number(byId("light-select").value) === index;
+      select.textContent = selected ? "Selected" : "Inspect";
+      select.ariaLabel = `Select light ${text}`;
+      select.ariaPressed = String(selected);
+      select.dataset.lightIndex = String(index);
       select.disabled = !!renderer?.error;
       select.addEventListener("click", () => {
         byId("light-select").value = String(index);
         syncDropdown(byId("light-select"));
+        selectedSceneGroup = node;
         showLightInspector();
+        showSceneGroupInspector();
+        showSceneList();
+        sceneList
+          .querySelector?.(`[data-light-index="${index}"]`)
+          ?.focus();
         byId("light-position").focus?.();
       });
       item.append(label, select);
+      addOrderControls(item, node, siblings);
       container.append(item);
       return;
     }
@@ -1067,6 +1236,11 @@ function showSceneList() {
       if (toggle.checked && !viewpointAllows(model, viewpoint))
         reasons.push("viewpoint");
       if (toggle.checked && model.lod?.visible === false) reasons.push("LOD");
+      if (
+        toggle.checked &&
+        model.visibilityGroups?.some((group) => group.visible === false)
+      )
+        reasons.push("parent group");
       if (toggle.checked && model.gizmoVisible === false)
         reasons.push("gizmos");
       description.textContent = `${modelLabel(model)}${reasons.length ? ` (hidden by ${reasons.join(" and ")})` : ""}`;
@@ -1106,28 +1280,227 @@ function showSceneList() {
     });
     select.dataset.modelIndex = String(index);
     item.append(select);
+    addOrderControls(item, node, siblings);
     container.append(item);
   }
-  for (const node of sceneHierarchy) renderNode(node, sceneList);
+  for (const node of sceneHierarchy)
+    renderNode(node, sceneList, sceneHierarchy);
 }
 
 function showSceneGroupInspector() {
   const node = selectedSceneGroup;
-  byId("scene-group-fields").disabled = !node || !!renderer?.error;
+  const isLeaf = ["model", "light", "cabin-item"].includes(node?.type);
+  byId("scene-group-form").hidden = isLeaf;
+  byId("scene-group-fields").disabled = !node || isLeaf || !!renderer?.error;
   byId("scene-group-name").value = node?.name ?? "";
+  const parentSelect = byId("scene-group-parent");
+  parentSelect.replaceChildren();
+  const rootOption = document.createElement("option");
+  rootOption.value = "root";
+  rootOption.textContent = "Scene root";
+  parentSelect.append(rootOption);
+  let currentParent = null;
+  if (node) {
+    currentParent = findSceneNodeParent(sceneHierarchy, node)?.parent ?? null;
+    function addParents(nodes) {
+      for (const candidate of nodes) {
+        if (
+          candidate !== node &&
+          !containsSceneNode(node, candidate) &&
+          canContainSceneNode(candidate)
+        ) {
+          candidate.parentKey ??= nextGroupId++;
+          const option = document.createElement("option");
+          option.value = String(candidate.parentKey);
+          option.textContent =
+            candidate.name + placementLabel(candidate.mapPlacement);
+          parentSelect.append(option);
+        }
+        if (candidate !== node && !containsSceneNode(node, candidate))
+          addParents(candidate.children || []);
+      }
+    }
+    addParents(sceneHierarchy);
+  }
+  parentSelect.value =
+    currentParent === null ? "root" : String(currentParent.parentKey);
+  syncDropdown(parentSelect);
+  byId("scene-group-parent-fields").disabled =
+    !node || !!renderer?.error;
   byId("scene-group-lod-form").hidden = node?.type !== "lod";
   byId("scene-group-lod-fields").disabled =
     node?.type !== "lod" || !!renderer?.error;
   byId("scene-group-lod-radius").value =
     node?.lod?.viewRadius === null ? "" : (node?.lod?.radiusText ?? "");
+  const hasModels =
+    !!node && descendantModels(node).some((model) => model.vertices?.length);
+  const light = node?.type === "light" ? sceneLights[node.lightIndex] : null;
+  const cabinPoint =
+    node?.type === "cabin-item" &&
+    node.info?.kind === "path point" &&
+    Array.isArray(node.info.position) &&
+    node.info.position.length === 3
+      ? node.info
+      : null;
+  const cabinItemPosition =
+    node?.type === "cabin-item" &&
+    Array.isArray(node.info?.position) &&
+    node.info.position.length === 3
+      ? node.info
+      : null;
   byId("focus-scene-group").disabled =
     !node ||
     !!renderer?.error ||
-    !descendantModels(node).some((model) => model.vertices?.length);
+    (!hasModels && !light && !cabinPoint && !cabinItemPosition);
+  byId("focus-scene-group").textContent =
+    node?.type === "model"
+      ? "Focus model"
+      : node?.type === "light"
+        ? "Focus light"
+        : cabinPoint
+          ? "Focus cabin point"
+          : cabinItemPosition
+            ? "Focus cabin item"
+          : "Focus group";
+  byId("scene-group-parent-form").querySelector(
+    'button[type="submit"]',
+  ).textContent =
+    node?.type === "model"
+      ? "Move model"
+      : node?.type === "light"
+        ? "Move light"
+        : node?.type === "cabin-item"
+          ? "Move cabin entry"
+          : "Move group";
   byId("scene-group-info").textContent = node
     ? `Type: ${node.type}\nOriginal name: ${node.sourceName ?? node.name}\nDescendant models: ${descendantModels(node).length}`
-    : "No group selected.";
+    : "No scene node selected.";
 }
+
+function findSceneParent(key) {
+  if (key === "root") return null;
+  function find(nodes) {
+    for (const node of nodes) {
+      if (String(node.parentKey) === key) return node;
+      const found = find(node.children || []);
+      if (found) return found;
+    }
+    return null;
+  }
+  return find(sceneHierarchy);
+}
+
+function findSceneModelNode(index, nodes = sceneHierarchy) {
+  for (const node of nodes) {
+    if (node.type === "model" && node.modelIndex === index) return node;
+    const found = findSceneModelNode(index, node.children || []);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findCabinItemNode(info, nodes = sceneHierarchy) {
+  for (const node of nodes) {
+    if (node.type === "cabin-item" && node.info === info) return node;
+    const found = findCabinItemNode(info, node.children || []);
+    if (found) return found;
+  }
+  return null;
+}
+
+function selectCabinItemNode(node) {
+  selectedCabinItem = node;
+  selectedSceneGroup = node;
+  showCabinInspector();
+  showSceneGroupInspector();
+  showSceneList();
+}
+
+byId("scene-group-parent-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const node = selectedSceneGroup;
+  if (!node || !renderer || renderer.error) return;
+  const previousVisibility = sceneModels.map((model, index) =>
+    isModelVisible(
+      model,
+      sceneVisibility[index],
+      configVisibility[index],
+      viewpoint,
+    ),
+  );
+  const attempted = [];
+  let move = null;
+  try {
+    const parent = findSceneParent(byId("scene-group-parent").value);
+    if (byId("scene-group-parent").value !== "root" && !parent)
+      throw new Error("Choose a valid scene group.");
+    move = reparentSceneNode(sceneHierarchy, node, parent);
+    if (!move) {
+      status.textContent = "The selected group already has that parent.";
+      return;
+    }
+    bindSceneVisibilityGroups(sceneHierarchy, sceneModels);
+    for (const [index, model] of sceneModels.entries()) {
+      const visible = isModelVisible(
+        model,
+        sceneVisibility[index],
+        configVisibility[index],
+        viewpoint,
+      );
+      if (visible === previousVisibility[index]) continue;
+      attempted.push({ index, visible: previousVisibility[index] });
+      renderer.setModelVisible(index, visible);
+    }
+    if (parent) parent.expanded = true;
+    if (selectedExportGroup) {
+      const count = descendantModels(selectedExportGroup).length;
+      byId("export-group-label").textContent =
+        `Group: ${selectedExportGroup.name}${placementLabel(selectedExportGroup.mapPlacement)} (${count} models)`;
+      byId("export-group-obj").disabled = !count;
+      byId("export-group-mtl").disabled = !count;
+    }
+    showSceneGroupInspector();
+    showSceneList();
+    const type =
+      node.type === "model"
+        ? "Model"
+        : node.type === "light"
+          ? "Light"
+          : node.type === "cabin-item"
+            ? "Cabin entry"
+            : "Group";
+    status.textContent =
+      `${type} moved in the scene hierarchy. Source files and model transforms are unchanged.`;
+  } catch (error) {
+    const errors = [error];
+    if (move) {
+      try {
+        restoreSceneNodeParent(sceneHierarchy, node, move);
+        bindSceneVisibilityGroups(sceneHierarchy, sceneModels);
+      } catch (rollbackError) {
+        errors.push(rollbackError);
+      }
+    }
+    for (const { index, visible } of attempted.reverse()) {
+      try {
+        renderer.setModelVisible(index, visible);
+      } catch (rollbackError) {
+        errors.push(rollbackError);
+      }
+    }
+    showSceneGroupInspector();
+    showSceneList();
+    const result =
+      errors.length > 1
+        ? new AggregateError(
+            errors,
+            "Group reparenting failed and rollback was incomplete",
+          )
+        : error;
+    console.error("Unable to move scene node", result);
+    status.textContent = `Unable to move scene node: ${result.message}`;
+  }
+});
 
 byId("scene-group-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1156,11 +1529,38 @@ byId("scene-group-form").addEventListener("submit", (event) => {
 byId("focus-scene-group").addEventListener("click", () => {
   if (!selectedSceneGroup || !renderer || renderer.error) return;
   try {
-    focusModels(renderer, descendantModels(selectedSceneGroup));
-    status.textContent = "Focused scene group.";
+    if (selectedSceneGroup.type === "light") {
+      const light = sceneLights[selectedSceneGroup.lightIndex];
+      if (!light) throw new Error("The selected light is no longer available.");
+      focusPosition(renderer, light.position);
+      status.textContent = "Centered the view on the selected light.";
+    } else if (
+      selectedSceneGroup.type === "cabin-item" &&
+      Array.isArray(selectedSceneGroup.info?.position) &&
+      selectedSceneGroup.info.position.length === 3
+    ) {
+      const { info } = selectedSceneGroup;
+      focusPosition(
+        renderer,
+        cabinPathPointWorldPosition(
+          info.position,
+          info.pathState?.placement ?? info.mapPlacement,
+        ),
+      );
+      status.textContent =
+        info.kind === "path point"
+          ? "Centered the view on the selected cabin path point."
+          : "Centered the view on the selected cabin item.";
+    } else {
+      focusModels(renderer, descendantModels(selectedSceneGroup));
+      status.textContent =
+        selectedSceneGroup.type === "model"
+          ? "Focused selected model."
+          : "Focused scene group.";
+    }
   } catch (error) {
-    console.error("Unable to focus group", error);
-    status.textContent = `Unable to focus group: ${error.message}`;
+    console.error("Unable to focus scene selection", error);
+    status.textContent = `Unable to focus scene selection: ${error.message}`;
   }
 });
 
@@ -1188,18 +1588,34 @@ byId("scene-group-lod-form").addEventListener("submit", (event) => {
 
 function showCabinInspector() {
   const info = selectedCabinItem?.info;
+  const hasItem = selectedCabinItem?.type === "cabin-item";
   const editable = info?.kind === "path point" && !!info.pathState;
   const editableLink = info?.kind === "path link" && !!info.pathState;
+  const editablePosition = Number.isInteger(info?.markerModelIndex);
+  const editableSeat =
+    ["passpos", "drivpos"].includes(info?.kind) &&
+    Number.isFinite(info.height) &&
+    Number.isFinite(info.rotation);
+  byId("cabin-item-name-form").hidden = !hasItem;
+  byId("cabin-item-name-fields").disabled = !hasItem || !!renderer?.error;
   byId("cabin-point-form").hidden = !editable;
   byId("cabin-point-fields").disabled = !editable || !!renderer?.error;
   byId("cabin-link-form").hidden = !editableLink;
   byId("cabin-link-fields").disabled = !editableLink || !!renderer?.error;
+  byId("cabin-item-position-form").hidden = !editablePosition;
+  byId("cabin-item-position-fields").disabled =
+    !editablePosition || !!renderer?.error;
+  byId("cabin-seat-form").hidden = !editableSeat;
+  byId("cabin-seat-fields").disabled = !editableSeat || !!renderer?.error;
   if (!info) {
     byId("cabin-info").textContent = "No cabin item selected.";
     return;
   }
   const rows = [
     selectedCabinItem.name,
+    ...(selectedCabinItem.sourceName
+      ? [`Original name: ${selectedCabinItem.sourceName}`]
+      : []),
     `Source: ${info.source}:${info.line}`,
     `Type: ${info.kind}`,
   ];
@@ -1220,7 +1636,14 @@ function showCabinInspector() {
     );
   }
   byId("cabin-info").textContent = rows.join("\n");
+  if (hasItem) byId("cabin-item-name").value = selectedCabinItem.name;
   if (editable) byId("cabin-point-position").value = info.position.join(" ");
+  if (editablePosition)
+    byId("cabin-item-position").value = info.position.join(" ");
+  if (editableSeat) {
+    byId("cabin-seat-height").value = String(info.height);
+    byId("cabin-seat-rotation").value = String(info.rotation);
+  }
   if (editableLink) {
     byId("cabin-link-a").value = String(info.link.a);
     byId("cabin-link-b").value = String(info.link.b);
@@ -1229,6 +1652,63 @@ function showCabinInspector() {
     byId("cabin-link-sound").value = String(info.link.stepSound);
   }
 }
+
+byId("cabin-item-name-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const node = selectedCabinItem;
+  if (node?.type !== "cabin-item" || !renderer || renderer.error) return;
+  try {
+    const name = byId("cabin-item-name").value.trim();
+    if (!name || /[\u0000-\u001f\u007f]/.test(name))
+      throw new Error("Enter a non-empty name without control characters.");
+    node.sourceName ??= node.name;
+    node.name = name;
+    showCabinInspector();
+    showSceneGroupInspector();
+    showSceneList();
+    status.textContent =
+      "Cabin item renamed for this scene. Source files are unchanged.";
+  } catch (error) {
+    console.error("Unable to rename cabin item", error);
+    status.textContent = `Unable to rename cabin item: ${error.message}`;
+  }
+});
+
+byId("cabin-item-position-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const info = selectedCabinItem?.info;
+  if (!Number.isInteger(info?.markerModelIndex) || !renderer || renderer.error)
+    return;
+  try {
+    const position = parseVector(
+      byId("cabin-item-position").value,
+      3,
+      "Position",
+    );
+    const markerModel = sceneModels[info.markerModelIndex];
+    if (!markerModel) throw new Error("Cabin marker model is missing.");
+    updateCabinMarkerPosition(
+      markerModel,
+      info,
+      position,
+      renderer,
+      sceneModels,
+      sceneVisibility,
+      configVisibility,
+      viewpoint,
+      selectedModel,
+    );
+    lastPick = null;
+    showCabinInspector();
+    showSceneGroupInspector();
+    showSceneList();
+    status.textContent =
+      "Cabin position updated for this scene. Source files are unchanged.";
+  } catch (error) {
+    console.error("Unable to update cabin position", error);
+    status.textContent = `Unable to update cabin position: ${error.message}`;
+  }
+});
 
 byId("cabin-point-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1258,6 +1738,40 @@ byId("cabin-point-form").addEventListener("submit", (event) => {
   } catch (error) {
     console.error("Unable to update cabin path point", error);
     status.textContent = `Unable to update cabin path point: ${error.message}`;
+  }
+});
+
+byId("cabin-seat-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const info = selectedCabinItem?.info;
+  if (
+    !["passpos", "drivpos"].includes(info?.kind) ||
+    !renderer ||
+    renderer.error
+  )
+    return;
+  try {
+    const heightText = byId("cabin-seat-height").value.trim();
+    const rotationText = byId("cabin-seat-rotation").value.trim();
+    const height = Number(heightText);
+    const rotation = Number(rotationText);
+    if (
+      !heightText ||
+      !rotationText ||
+      !Number.isFinite(height) ||
+      !Number.isFinite(Math.fround(height)) ||
+      !Number.isFinite(rotation) ||
+      !Number.isFinite(Math.fround(rotation))
+    )
+      throw new Error("Enter finite 32-bit height and rotation values.");
+    info.height = Math.fround(height);
+    info.rotation = Math.fround(rotation);
+    showCabinInspector();
+    status.textContent =
+      "Seat properties updated for this scene. Source files are unchanged.";
+  } catch (error) {
+    console.error("Unable to update cabin seat properties", error);
+    status.textContent = `Unable to update seat properties: ${error.message}`;
   }
 });
 
@@ -1745,6 +2259,7 @@ open.addEventListener("click", async () => {
         modelIndex,
         children: [],
       }));
+    bindSceneVisibilityGroups(sceneHierarchy, result.models);
     selectedCabinItem = null;
     showCabinInspector();
     selectedSceneGroup = null;
@@ -1894,16 +2409,28 @@ try {
         lastPick.index === selectedModel
           ? lastPick.index
           : null;
-      const index = pickModel(
+      const hit = pickModelHit(
         renderer,
         sceneModels,
         event.clientX,
         event.clientY,
         after,
       );
+      const index = hit?.index ?? null;
       lastPick =
         index === null ? null : { x: event.clientX, y: event.clientY, index };
-      if (index !== null) selectModel(index);
+      if (index !== null) {
+        selectModel(index);
+        const markerItems = sceneModels[index]?.cabinMarkerItems;
+        if (Array.isArray(markerItems)) {
+          const itemIndex = Math.floor(
+            hit.triangleIndex / CABIN_MARKER_TRIANGLE_COUNT,
+          );
+          const item = markerItems[itemIndex];
+          const node = item && findCabinItemNode(item);
+          if (node) selectCabinItemNode(node);
+        }
+      }
     } catch (error) {
       console.error("Unable to pick model", error);
       status.textContent = `Unable to pick model: ${error.message}`;

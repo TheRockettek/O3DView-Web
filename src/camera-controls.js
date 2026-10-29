@@ -45,6 +45,19 @@ export function focusModel(renderer, modelIndex) {
   renderer._requestFrame();
 }
 
+export function focusPosition(renderer, position) {
+  renderer._assertUsable();
+  if (
+    !Array.isArray(position) ||
+    position.length !== 3 ||
+    !position.every(Number.isFinite)
+  ) {
+    throw new TypeError("Invalid focus position");
+  }
+  renderer._target = [...position];
+  renderer._requestFrame();
+}
+
 export function focusModels(renderer, models) {
   renderer._assertUsable();
   if (!Array.isArray(models)) throw new TypeError("Invalid models");

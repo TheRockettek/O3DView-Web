@@ -21,6 +21,7 @@ import {
 import {
   parseCabinPaths,
   parsePassengerCabin,
+  generateCabinMarkerMesh,
   generateCabinPathMesh,
 } from "./cabin-path.js";
 
@@ -914,24 +915,79 @@ export async function loadScene(files, entryPaths, options = {}) {
                 warnings.push(
                   `${child.path}:${item.line}: ${item.name} references a missing cabin path point ${item.pathPoint}`,
                 );
+              const hasDirectPosition = Array.isArray(item.position);
               return {
                 type: "cabin-item",
                 name: item.name,
+                hasDirectPosition,
                 children: [],
                 info: {
                   ...item,
                   source: child.path,
+                  ...(placement ? { mapPlacement: placement } : {}),
                   ...(point && !item.position ? { position: point } : {}),
                 },
               };
             });
-            if (items.length)
-              node.children.push({
+            if (items.length) {
+              const cabinNode = {
                 type: "cabin",
                 name: "Passenger Cabin",
                 order: cabinFile.line,
                 children: items,
-              });
+              };
+              node.children.push(cabinNode);
+              const markerItems = items
+                .filter(
+                  (item) =>
+                    item.hasDirectPosition &&
+                    Array.isArray(item.info.position),
+                )
+                .map((item) => item.info);
+              if (markerItems.length) {
+                try {
+                  const geometry = generateCabinMarkerMesh(
+                    markerItems.map((item) => item.position),
+                    placement,
+                  );
+                  const modelIndex = models.length;
+                  const name = "Cabin markers";
+                  for (const item of markerItems)
+                    item.markerModelIndex = modelIndex;
+                  models.push({
+                    name,
+                    cabinMarkerSource: child.path,
+                    cabinMarkerItems: markerItems,
+                    vertices: geometry.vertices,
+                    triangles: geometry.triangles,
+                    gizmoVisible: true,
+                    materials: [
+                      {
+                        diffuse: [0.2, 0.75, 1, 1],
+                        spec: [0, 0, 0],
+                        emission: [0, 0, 0],
+                        specPower: 0,
+                        textureName: "",
+                      },
+                    ],
+                    transform: [
+                      1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+                    ],
+                    ...(placement ? { mapPlacement: placement } : {}),
+                  });
+                  cabinNode.children.push({
+                    type: "model",
+                    name,
+                    modelIndex,
+                    children: [],
+                  });
+                } catch (error) {
+                  warnings.push(
+                    `Could not create passenger cabin markers ${child.path}: ${error.message}`,
+                  );
+                }
+              }
+            }
           } catch (error) {
             warnings.push(
               `Could not load passenger cabin ${child.path}: ${error.message}`,

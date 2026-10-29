@@ -37,6 +37,18 @@ export function pickModel(
   clientY,
   afterIndex = null,
 ) {
+  return (
+    pickModelHit(renderer, models, clientX, clientY, afterIndex)?.index ?? null
+  );
+}
+
+export function pickModelHit(
+  renderer,
+  models,
+  clientX,
+  clientY,
+  afterIndex = null,
+) {
   renderer._assertUsable();
   const rect = renderer.canvas.getBoundingClientRect();
   if (
@@ -97,7 +109,8 @@ export function pickModel(
       offsetSquared - along * along > radiusSquared
     )
       continue;
-    let closest = Infinity;
+    let closest = Infinity,
+      closestTriangleIndex = -1;
     for (let i = 0; i < model.triangles.length; i += 4) {
       const hit = triangleDistance(
         eye,
@@ -115,9 +128,15 @@ export function pickModel(
         hit * depthFactor <= far
       ) {
         closest = hit;
+        closestTriangleIndex = i / 4;
       }
     }
-    if (closest < Infinity) hits.push({ index, distance: closest });
+    if (closest < Infinity)
+      hits.push({
+        index,
+        distance: closest,
+        triangleIndex: closestTriangleIndex,
+      });
   }
   const previous = hits.find((hit) => hit.index === afterIndex);
   const minimum = previous?.distance ?? 0;
@@ -126,8 +145,10 @@ export function pickModel(
   for (const hit of hits) {
     if (hit.distance > minimum && hit.distance < closest) {
       closest = hit.distance;
-      selected = hit.index;
+      selected = hit;
     }
   }
-  return selected;
+  return selected
+    ? { index: selected.index, triangleIndex: selected.triangleIndex }
+    : null;
 }

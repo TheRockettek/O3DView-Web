@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Renderer } from "../src/renderer.js";
 import { WebGLRenderer } from "../src/webgl-renderer.js";
-import { focusModels, modelBounds } from "../src/camera-controls.js";
+import {
+  focusModels,
+  focusPosition,
+  modelBounds,
+} from "../src/camera-controls.js";
 
 test("model bounds reflect X and preserve an empty model", () => {
   assert.equal(modelBounds(new Float32Array()), null);
@@ -45,6 +49,31 @@ test("focusing a group uses all descendant geometry and preserves viewing angles
       ]),
     /Invalid model position/,
   );
+});
+
+test("focusing a position recenters without changing camera distance or angles", () => {
+  const renderer = {
+    _assertUsable() {},
+    _requestFrame() {
+      this.frames++;
+    },
+    frames: 0,
+    _target: [0, 0, 0],
+    _distance: 12,
+    _viewRadius: 6,
+    _yaw: 0.4,
+    _pitch: -0.3,
+  };
+  focusPosition(renderer, [3, 4, 5]);
+  assert.deepEqual(renderer._target, [3, 4, 5]);
+  assert.equal(renderer._distance, 12);
+  assert.equal(renderer._viewRadius, 6);
+  assert.equal(renderer._yaw, 0.4);
+  assert.equal(renderer._pitch, -0.3);
+  assert.equal(renderer.frames, 1);
+  assert.throws(() => focusPosition(renderer, [0, NaN, 0]), /focus position/);
+  assert.throws(() => focusPosition(renderer, [0, 0]), /focus position/);
+  assert.equal(renderer.frames, 1);
 });
 
 for (const [name, create] of [

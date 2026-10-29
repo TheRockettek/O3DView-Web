@@ -1,6 +1,29 @@
 // The desktop viewer defaults to 16 lights, including its sun.
 export const MAX_INTERIOR_LIGHTS = 15;
 
+export function duplicateLight(source, lights) {
+  if (!source || typeof source !== "object" || !Array.isArray(lights))
+    throw new TypeError("Invalid light duplication request");
+  if (!Array.isArray(source.position) || !Array.isArray(source.color))
+    throw new TypeError("Invalid source light");
+  const base = `${source.name || source.variable || "Light"} copy`;
+  let name = base;
+  for (let suffix = 2; lights.some((light) => light?.name === name); suffix++)
+    name = `${base} ${suffix}`;
+  return {
+    name,
+    created: true,
+    mode: source.mode ?? "point",
+    position: [...source.position],
+    direction: [...(source.direction ?? [0, -1, 0])],
+    color: [...source.color],
+    ambient: [...(source.ambient ?? [0, 0, 0])],
+    range: source.range,
+    intensity: source.intensity ?? 1,
+    on: source.on,
+  };
+}
+
 export function encodeInteriorLights(lights) {
   if (!Array.isArray(lights)) throw new TypeError("Lights must be an array");
   const positions = new Float32Array(MAX_INTERIOR_LIGHTS * 4);

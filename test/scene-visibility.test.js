@@ -4,6 +4,8 @@ import {
   changeViewpoint,
   changeLodVisibility,
   changeGizmoVisibility,
+  bindSceneVisibilityGroups,
+  changeSceneGroupVisibility,
   isModelVisible,
   viewpointAllows,
 } from "../src/scene-visibility.js";
@@ -26,6 +28,119 @@ test("viewpoint masks match desktop selection semantics", () => {
       expected,
     );
   }
+});
+
+test("scene group visibility composes with nested groups and preserves child choices", () => {
+  const models = [{}, {}, {}];
+  const nested = { type: "map", children: [] };
+  const parent = {
+    type: "configuration",
+    children: [
+      { type: "model", modelIndex: 0, children: [] },
+      nested,
+      { type: "model", modelIndex: 2, children: [] },
+    ],
+  };
+  nested.children.push({ type: "model", modelIndex: 1, children: [] });
+  bindSceneVisibilityGroups([parent], models);
+  const calls = [];
+  const renderer = { setModelVisible: (...args) => calls.push(args) };
+  const manual = [true, true, false];
+  const config = [true, true, true];
+
+  changeSceneGroupVisibility(
+    renderer,
+    models,
+    manual,
+    config,
+    0,
+    parent,
+    false,
+  );
+  assert.deepEqual(calls, [
+    [0, false],
+    [1, false],
+  ]);
+  assert.equal(isModelVisible(models[2], manual[2], config[2], 0), false);
+  assert.deepEqual(manual, [true, true, false]);
+
+  changeSceneGroupVisibility(
+    renderer,
+    models,
+    manual,
+    config,
+    0,
+    parent,
+    true,
+  );
+  assert.deepEqual(calls.slice(2), [
+    [0, true],
+    [1, true],
+  ]);
+  assert.equal(isModelVisible(models[2], manual[2], config[2], 0), false);
+
+  calls.length = 0;
+  changeSceneGroupVisibility(
+    renderer,
+    models,
+    manual,
+    config,
+    0,
+    nested,
+    false,
+  );
+  assert.deepEqual(calls, [[1, false]]);
+  assert.equal(isModelVisible(models[0], manual[0], config[0], 0), true);
+  assert.equal(isModelVisible(models[1], manual[1], config[1], 0), false);
+  changeSceneGroupVisibility(
+    renderer,
+    models,
+    manual,
+    config,
+    0,
+    nested,
+    true,
+  );
+  assert.deepEqual(calls.slice(1), [[1, true]]);
+}
+
+test("scene group visibility rolls back renderer and group state on failure", () => {
+  const group = {
+    type: "configuration",
+    children: [
+      { type: "model", modelIndex: 0, children: [] },
+      { type: "model", modelIndex: 1, children: [] },
+    ],
+  };
+  const models = [{}, {}];
+  bindSceneVisibilityGroups([group], models);
+  const calls = [];
+  const renderer = {
+    setModelVisible(index, visible) {
+      calls.push([index, visible]);
+      if (index === 1 && !visible) throw new Error("device error");
+    },
+  };
+  assert.throws(
+    () =>
+      changeSceneGroupVisibility(
+        renderer,
+        models,
+        [true, true],
+        [true, true],
+        0,
+        group,
+        false,
+      ),
+    /device error/,
+  );
+  assert.equal(group.visible, true);
+  assert.deepEqual(calls, [
+    [0, false],
+    [1, false],
+    [1, true],
+    [0, true],
+  ]);
 });
 
 test("viewpoint changes preserve manual visibility and only update affected models", () => {

@@ -1,7 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { encodeInteriorLights } from "../src/light-data.js";
+import { duplicateLight, encodeInteriorLights } from "../src/light-data.js";
+import {
+  canContainSceneNode,
+  containsSceneNode,
+  findSceneNodeParent,
+  moveSceneNode,
+  reparentSceneNode,
+  restoreSceneNodeParent,
+} from "../src/scene-hierarchy.js";
+import { focusPosition } from "../src/camera-controls.js";
+import {
+  CABIN_MARKER_TRIANGLE_COUNT,
+  cabinPathPointWorldPosition,
+  updateCabinMarkerPosition,
+} from "../src/cabin-path.js";
 
 class Element {
   constructor(id = "") {
@@ -29,6 +43,11 @@ class Element {
       children[0]?.value !== undefined
     )
       this.value = children[0].value;
+  }
+  querySelector(selector) {
+    if (selector === 'button[type="submit"]')
+      return (this.submitButton ??= new Element());
+    return null;
   }
   async emit(type, extra = {}) {
     return this.listeners[type]?.({
@@ -131,7 +150,7 @@ test("scene selection and applied material edits reach export; failures appear i
                 line: 1,
                 index: 0,
                 position: [0, 0, 0],
-                pathState: {},
+                pathState: { placement: null },
               },
             },
             {
@@ -170,9 +189,11 @@ test("scene selection and applied material edits reach export; failures appear i
   hierarchy[0].children[1].lod = lods[0];
   models[0].lod = lods[0];
   const calls = [];
+  const focusedPositions = [];
   const lightUpdates = [];
   const collectedLights = [];
   const picks = [];
+  let pickHit = null;
   let sceneResult = { models, lights, lods, hierarchy, warnings: [] };
   let failCreate = false;
   let failDelete = false;
@@ -254,13 +275,28 @@ test("scene selection and applied material edits reach export; failures appear i
     captureDrop() {},
     readDroppedFiles() {},
     MAX_INTERIOR_LIGHTS: 15,
+    duplicateLight,
+    canContainSceneNode,
+    containsSceneNode,
+    findSceneNodeParent,
+    moveSceneNode,
+    reparentSceneNode,
+    restoreSceneNodeParent,
+    CABIN_MARKER_TRIANGLE_COUNT,
+    cabinPathPointWorldPosition,
+    updateCabinMarkerPosition,
     updateNightStrength() {},
     createRepaintSession: () => repaint,
     enhanceDropdowns() {},
     syncDropdown() {},
-    pickModel: (_renderer, _models, _x, _y, after) => {
+    pickModelHit: (_renderer, _models, _x, _y, after) => {
       picks.push(after);
-      return after === 1 ? 0 : 1;
+      return (
+        pickHit ??
+        (after === 1
+          ? { index: 0, triangleIndex: 0 }
+          : { index: 1, triangleIndex: 0 })
+      );
     },
     translateSceneModel: (_renderer, models, index, translation) => {
       models[index].worldTranslation = translation;
@@ -274,6 +310,7 @@ test("scene selection and applied material edits reach export; failures appear i
       return [];
     },
     focusModels: (_renderer, models) => calls.push({ focusGroup: models }),
+    focusPosition: (_renderer, position) => focusedPositions.push(position),
     combineSceneModels: (value, name = "scene.obj") => ({
       name,
       materials: value[0].materials,
@@ -294,7 +331,7 @@ test("scene selection and applied material edits reach export; failures appear i
       await readFile(new URL("../src/app.js", import.meta.url), "utf8")
     ).replace(/^import .*;\n/gm, "");
     const prefix =
-      "const { createRenderer, loadScene, decodeConfiguration, listCommands, collectSceneVariables, updateSceneVariable, changeViewpoint, changeLodVisibility, changeGizmoVisibility, isModelVisible, viewpointAllows, captureDrop, readDroppedFiles, downloadWavefront, downloadO3D, combineSceneModels, MAX_INTERIOR_LIGHTS, updateNightStrength, createRepaintSession, enhanceDropdowns, syncDropdown, pickModel, translateSceneModel, updateCabinPathPoint, updateCabinPathLink, focusModels } = globalThis.__appTestDeps;\n";
+      "const { createRenderer, loadScene, decodeConfiguration, listCommands, collectSceneVariables, updateSceneVariable, changeViewpoint, changeLodVisibility, changeGizmoVisibility, isModelVisible, viewpointAllows, captureDrop, readDroppedFiles, downloadWavefront, downloadO3D, combineSceneModels, MAX_INTERIOR_LIGHTS, duplicateLight, canContainSceneNode, containsSceneNode, findSceneNodeParent, moveSceneNode, reparentSceneNode, restoreSceneNodeParent, CABIN_MARKER_TRIANGLE_COUNT, updateNightStrength, createRepaintSession, enhanceDropdowns, syncDropdown, pickModelHit, translateSceneModel, updateCabinPathPoint, updateCabinPathLink, updateCabinMarkerPosition, focusModels, focusPosition, cabinPathPointWorldPosition } = globalThis.__appTestDeps;\n";
     await import(
       `data:text/javascript;base64,${Buffer.from(prefix + source).toString("base64")}`
     );
@@ -311,12 +348,50 @@ test("scene selection and applied material edits reach export; failures appear i
       get("cabin-info").textContent,
       /OMSI position \(X Y Z\): 1 2 3/,
     );
+    assert.equal(get("focus-scene-group").textContent, "Focus cabin item");
+    await get("focus-scene-group").emit("click");
+    assert.deepEqual(focusedPositions.at(-1), [1, 3, 2]);
+    assert.match(
+      get("status").textContent,
+      /Centered the view on the selected cabin item/,
+    );
+    assert.equal(get("cabin-seat-form").hidden, false);
+    get("cabin-seat-height").value = "1.25";
+    get("cabin-seat-rotation").value = "180";
+    await get("cabin-seat-form").emit("submit");
+    assert.equal(hierarchy[0].children[3].children[0].info.height, 1.25);
+    assert.equal(hierarchy[0].children[3].children[0].info.rotation, 180);
+    assert.match(get("cabin-info").textContent, /Height: 1.25/);
+    assert.match(get("status").textContent, /Seat properties updated/);
+    const seatError = console.error;
+    try {
+      console.error = () => {};
+      get("cabin-seat-height").value = "2";
+      get("cabin-seat-rotation").value = "1e1000";
+      await get("cabin-seat-form").emit("submit");
+    } finally {
+      console.error = seatError;
+    }
+    assert.equal(hierarchy[0].children[3].children[0].info.height, 1.25);
+    assert.equal(hierarchy[0].children[3].children[0].info.rotation, 180);
+    assert.match(get("status").textContent, /finite 32-bit/);
+    assert.equal(get("cabin-item-name-form").hidden, false);
+    assert.equal(get("cabin-item-name").value, "Seat 0");
+    get("cabin-item-name").value = "Front seat";
+    await get("cabin-item-name-form").emit("submit");
+    assert.equal(hierarchy[0].children[3].children[0].name, "Front seat");
+    assert.match(
+      get("cabin-info").textContent,
+      /^Front seat\nOriginal name: Seat 0/,
+    );
+    assert.match(get("status").textContent, /renamed for this scene/);
     assert.equal(get("cabin-point-form").hidden, true);
     const pointInspect =
       get("scene-list").children[0].children[0].children[1].children[3]
         .children[0].children[1].children[1].children[1];
     await pointInspect.emit("click");
     assert.equal(get("cabin-point-form").hidden, false);
+    assert.equal(get("cabin-seat-form").hidden, true);
     get("cabin-point-position").value = "4 5 6";
     await get("cabin-point-form").emit("submit");
     assert.match(
@@ -324,12 +399,20 @@ test("scene selection and applied material edits reach export; failures appear i
       /OMSI position \(X Y Z\): 4 5 6/,
     );
     assert.match(get("status").textContent, /Cabin path point updated/);
+    assert.equal(get("focus-scene-group").textContent, "Focus cabin point");
+    await get("focus-scene-group").emit("click");
+    assert.deepEqual(focusedPositions.at(-1), [4, 6, 5]);
+    assert.match(
+      get("status").textContent,
+      /Centered the view on the selected cabin path point/,
+    );
     const linkInspect =
       get("scene-list").children[0].children[0].children[1].children[3]
         .children[0].children[1].children[2].children[1];
     await linkInspect.emit("click");
     assert.equal(get("cabin-point-form").hidden, true);
     assert.equal(get("cabin-link-form").hidden, false);
+    assert.equal(get("focus-scene-group").disabled, true);
     get("cabin-link-a").value = "1";
     get("cabin-link-b").value = "2";
     get("cabin-link-oneway").checked = true;
@@ -483,6 +566,36 @@ test("scene selection and applied material edits reach export; failures appear i
       range: 7,
       intensity: 2,
     });
+    failCreate = true;
+    await get("duplicate-light").emit("click");
+    assert.equal(lights.length, 1);
+    assert.equal(hierarchy[0].children[2].children.length, 1);
+    assert.match(
+      get("status").textContent,
+      /Unable to duplicate light: creation failed/,
+    );
+    failCreate = false;
+    await get("duplicate-light").emit("click");
+    assert.equal(lights.length, 2);
+    assert.equal(get("light-select").value, "1");
+    assert.deepEqual(hierarchy[0].children[2].children[1], {
+      type: "light",
+      name: "Renamed lamp copy",
+      lightIndex: 1,
+      children: [],
+    });
+    assert.equal(lights[1].created, true);
+    assert.equal("variable" in lights[1], false);
+    assert.deepEqual(lights[1].position, [4, 5, 6]);
+    assert.deepEqual(lights[1].color, [0.2, 0.3, 0.4]);
+    assert.equal(get("focus-scene-group").textContent, "Focus light");
+    await get("focus-scene-group").emit("click");
+    assert.deepEqual(focusedPositions.at(-1), [4, 5, 6]);
+    assert.match(get("status").textContent, /Centered the view on the selected light/);
+    await get("delete-light").emit("click");
+    assert.equal(lights.length, 1);
+    assert.equal(hierarchy[0].children[2].children.length, 1);
+    assert.equal(get("scene-group-info").textContent, "No scene node selected.");
     const oldLightError = console.error;
     try {
       console.error = () => {};
@@ -740,6 +853,76 @@ test("scene selection and applied material edits reach export; failures appear i
       get("cabin-info").textContent,
       /OMSI position \(X Y Z\): 1 2 3/,
     );
+    const makeCabinRecord = (name, line) => ({
+      kind: "passpos",
+      source: "cabin.cfg",
+      line,
+      name,
+      position: [line, 0, 0],
+      height: 1,
+      rotation: 0,
+    });
+    const firstRecord = makeCabinRecord("Seat 0", 1);
+    const secondRecord = makeCabinRecord("Seat 1", 2);
+    const markerModel = {
+      name: "Cabin markers",
+      vertices: new Float32Array(8),
+      triangles: new Uint32Array(4),
+      materials: [material()],
+      cabinMarkerItems: [firstRecord, secondRecord],
+    };
+    firstRecord.markerModelIndex = 0;
+    secondRecord.markerModelIndex = 0;
+    sceneResult = {
+      models: [markerModel],
+      lights: [],
+      lods: [],
+      warnings: [],
+      hierarchy: [
+        {
+          type: "configuration",
+          name: "vehicle.bus",
+          children: [
+            {
+              type: "cabin",
+              name: "Passenger Cabin",
+              children: [
+                {
+                  type: "cabin-item",
+                  name: "Seat 0",
+                  info: firstRecord,
+                  children: [],
+                },
+                {
+                  type: "cabin-item",
+                  name: "Seat 1",
+                  info: secondRecord,
+                  children: [],
+                },
+                {
+                  type: "model",
+                  name: "Cabin markers",
+                  modelIndex: 0,
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    await get("open").emit("click");
+    pickHit = { index: 0, triangleIndex: CABIN_MARKER_TRIANGLE_COUNT };
+    const markerPointer = {
+      pointerId: 2,
+      button: 0,
+      clientX: 40,
+      clientY: 50,
+    };
+    await get("viewport").emit("pointerdown", markerPointer);
+    await get("viewport").emit("pointerup", markerPointer);
+    assert.match(get("cabin-info").textContent, /^Seat 1\n/);
+    assert.equal(get("cabin-seat-form").hidden, false);
   } finally {
     delete globalThis.document;
     delete globalThis.__appTestDeps;

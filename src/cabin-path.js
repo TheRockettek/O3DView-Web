@@ -9,6 +9,25 @@ const TAG = /^\s*\[([^\[\]]+)\]\s*$/;
 const NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
 const INTEGER = /^[+-]?\d+$/;
 
+export function cabinPathPointWorldPosition(position, placement) {
+  if (
+    !Array.isArray(position) ||
+    position.length !== 3 ||
+    !position.every(
+      (value) => Number.isFinite(value) && Number.isFinite(Math.fround(value)),
+    )
+  ) {
+    throw new TypeError("Invalid cabin path point position");
+  }
+  const vertices = new Float32Array(8);
+  vertices.set([position[0], position[2], position[1]]);
+  const world = placement ? placeMapVertices(vertices, placement) : vertices;
+  const result = [...world.slice(0, 3)];
+  if (!result.every(Number.isFinite))
+    throw new RangeError("Cabin path point exceeds 32-bit float range");
+  return result;
+}
+
 export function parseCabinPaths(text) {
   if (typeof text !== "string") throw new TypeError("Expected cabin path text");
   const lines = text.split(/\r\n|\n|\r/),
@@ -179,9 +198,151 @@ export function parsePassengerCabin(text) {
   return { items, warnings };
 }
 
+const CABIN_MARKER_RADIUS = 0.075;
+const CABIN_MARKER_DIRECTIONS = [
+  [0, 1, 0],
+  [1, 0, 0],
+  [0, 0, 1],
+  [-1, 0, 0],
+  [0, 0, -1],
+  [0, -1, 0],
+];
+const CABIN_MARKER_FACES = [
+  [0, 1, 2],
+  [0, 2, 3],
+  [0, 3, 4],
+  [0, 4, 1],
+  [5, 2, 1],
+  [5, 3, 2],
+  [5, 4, 3],
+  [5, 1, 4],
+];
+export const CABIN_MARKER_TRIANGLE_COUNT = CABIN_MARKER_FACES.length;
+
+function appendCabinMarkers(vertices, triangles, positions) {
+  if (positions.length > 166666)
+    throw new RangeError("Cabin has too many positioned records");
+  for (const position of positions) {
+    if (!position) continue;
+    if (
+      !Array.isArray(position) ||
+      position.length !== 3 ||
+      !position.every(
+        (value) => Number.isFinite(value) && Number.isFinite(Math.fround(value)),
+      )
+    ) {
+      throw new TypeError("Invalid cabin marker position");
+    }
+    const center = [position[0], position[2], position[1]];
+    const base = vertices.length / 8;
+    for (const direction of CABIN_MARKER_DIRECTIONS)
+      vertices.push(
+        center[0] + direction[0] * CABIN_MARKER_RADIUS,
+        center[1] + direction[1] * CABIN_MARKER_RADIUS,
+        center[2] + direction[2] * CABIN_MARKER_RADIUS,
+        ...direction,
+        0,
+        0,
+      );
+    for (const face of CABIN_MARKER_FACES) {
+      let [a, b, c] = face;
+      const first = CABIN_MARKER_DIRECTIONS[b].map(
+        (value, axis) => value - CABIN_MARKER_DIRECTIONS[a][axis],
+      );
+      const second = CABIN_MARKER_DIRECTIONS[c].map(
+        (value, axis) => value - CABIN_MARKER_DIRECTIONS[a][axis],
+      );
+      const normal = [
+        first[1] * second[2] - first[2] * second[1],
+        first[2] * second[0] - first[0] * second[2],
+        first[0] * second[1] - first[1] * second[0],
+      ];
+      const outward = normal.reduce(
+        (sum, value, axis) =>
+          sum +
+          value *
+            (CABIN_MARKER_DIRECTIONS[a][axis] +
+              CABIN_MARKER_DIRECTIONS[b][axis] +
+              CABIN_MARKER_DIRECTIONS[c][axis]),
+        0,
+      );
+      if (outward < 0) [b, c] = [c, b];
+      triangles.push(base + a, base + b, base + c, 0);
+    }
+  }
+}
+
+export function generateCabinMarkerMesh(positions, placement) {
+  if (!Array.isArray(positions))
+    throw new TypeError("Cabin marker positions must be an array");
+  const vertices = [],
+    triangles = [];
+  appendCabinMarkers(vertices, triangles, positions);
+  const packed = new Float32Array(vertices);
+  const world = placement ? placeMapVertices(packed, placement) : packed;
+  if (!world.every(Number.isFinite))
+    throw new RangeError("Cabin marker exceeds 32-bit float range");
+  return { vertices: world, triangles: new Uint32Array(triangles) };
+}
+
+export function updateCabinMarkerPosition(
+  markerModel,
+  item,
+  position,
+  renderer,
+  models,
+  manual,
+  config,
+  viewpoint,
+  selected,
+) {
+  if (
+    !Array.isArray(position) ||
+    position.length !== 3 ||
+    !position.every(
+      (value) => Number.isFinite(value) && Number.isFinite(Math.fround(value)),
+    )
+  ) {
+    throw new TypeError("Position must contain three finite 32-bit numbers");
+  }
+  const modelIndex = models.indexOf(markerModel);
+  if (
+    modelIndex < 0 ||
+    !Array.isArray(markerModel.cabinMarkerItems) ||
+    !markerModel.cabinMarkerItems.includes(item)
+  ) {
+    throw new RangeError("Cabin marker item is missing");
+  }
+  const previous = item.position;
+  item.position = position.map(Math.fround);
+  try {
+    const geometry = generateCabinMarkerMesh(
+      markerModel.cabinMarkerItems.map((record) => record.position),
+      markerModel.mapPlacement,
+    );
+    replaceSceneGeometry(
+      renderer,
+      models,
+      modelIndex,
+      geometry.vertices,
+      geometry.triangles,
+      markerModel.worldTranslation ?? [0, 0, 0],
+      manual,
+      config,
+      viewpoint,
+      selected,
+    );
+  } catch (error) {
+    item.position = previous;
+    throw error;
+  }
+}
+
 export function generateCabinPathMesh(paths) {
   if (paths.links.length > 166666)
     throw new RangeError("Cabin path has too many links");
+  if (paths.points.length > 166666)
+    throw new RangeError("Cabin path has too many points");
   const vertices = [],
     triangles = [],
     warnings = [];
@@ -230,6 +391,7 @@ export function generateCabinPathMesh(paths) {
       0,
     );
   }
+  appendCabinMarkers(vertices, triangles, paths.points);
   const packed = new Float32Array(vertices);
   if (!packed.every(Number.isFinite))
     throw new RangeError("Cabin path exceeds 32-bit float range");

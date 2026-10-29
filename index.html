@@ -83,6 +83,7 @@
         <ul id="light-list"></ul>
         <label for="light-select">Inspect light</label>
         <select id="light-select" disabled><option>No lights</option></select>
+        <button id="duplicate-light" class="secondary" disabled>Duplicate selected light</button>
         <button id="delete-light" class="secondary" disabled>Delete selected light</button>
         <form id="light-form">
           <fieldset id="light-fields" disabled>
@@ -146,15 +147,22 @@
         </form>
       </section>
       <section>
-        <h2>Scene group inspector</h2>
-        <p>Inspect a group in the scene tree to rename it for this scene.</p>
-        <pre id="scene-group-info">No group selected.</pre>
+        <h2>Scene hierarchy inspector</h2>
+        <p>Select a model or group in the scene tree to inspect its hierarchy.</p>
+        <pre id="scene-group-info">No scene node selected.</pre>
         <button id="focus-scene-group" type="button" class="secondary" disabled>Focus group</button>
         <form id="scene-group-form">
           <fieldset id="scene-group-fields" disabled>
             <label for="scene-group-name">Scene group name</label>
             <input id="scene-group-name" required>
             <button type="submit" class="secondary">Rename group</button>
+          </fieldset>
+        </form>
+        <form id="scene-group-parent-form">
+          <fieldset id="scene-group-parent-fields" disabled>
+            <label for="scene-group-parent">Parent group</label>
+            <select id="scene-group-parent"></select>
+            <button type="submit" class="secondary">Move group</button>
           </fieldset>
         </form>
         <form id="scene-group-lod-form" hidden>
@@ -169,11 +177,34 @@
         <h2>Cabin inspector</h2>
         <p>Select a cabin item or path point in the scene tree to inspect its source data.</p>
         <pre id="cabin-info">No cabin item selected.</pre>
+        <form id="cabin-item-name-form" hidden>
+          <fieldset id="cabin-item-name-fields" disabled>
+            <label for="cabin-item-name">Scene name</label>
+            <input id="cabin-item-name" required>
+            <button type="submit" class="secondary">Rename cabin item</button>
+          </fieldset>
+        </form>
         <form id="cabin-point-form" hidden>
           <fieldset id="cabin-point-fields" disabled>
             <label for="cabin-point-position">Path point OMSI position (X Y Z)</label>
             <input id="cabin-point-position" required>
             <button type="submit" class="secondary">Apply path point</button>
+          </fieldset>
+        </form>
+        <form id="cabin-item-position-form" hidden>
+          <fieldset id="cabin-item-position-fields" disabled>
+            <label for="cabin-item-position">Cabin position OMSI (X Y Z)</label>
+            <input id="cabin-item-position" required>
+            <button type="submit" class="secondary">Apply cabin position</button>
+          </fieldset>
+        </form>
+        <form id="cabin-seat-form" hidden>
+          <fieldset id="cabin-seat-fields" disabled>
+            <label for="cabin-seat-height">Seat height</label>
+            <input id="cabin-seat-height" type="number" step="any" required>
+            <label for="cabin-seat-rotation">Seat rotation</label>
+            <input id="cabin-seat-rotation" type="number" step="any" required>
+            <button type="submit" class="secondary">Apply seat properties</button>
           </fieldset>
         </form>
         <form id="cabin-link-form" hidden>

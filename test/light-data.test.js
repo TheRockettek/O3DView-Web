@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  duplicateLight,
   encodeInteriorLights,
   MAX_INTERIOR_LIGHTS,
 } from "../src/light-data.js";
@@ -12,6 +13,35 @@ const light = (on = true) => ({
   range: 4,
   color: [1, 0.5, 0],
   on,
+});
+
+test("duplicated lights are independent scene lights without source bindings", () => {
+  const source = {
+    ...light(false),
+    name: "Lamp",
+    variable: "lights_lamp",
+    source: "vehicle.cfg",
+    line: 12,
+    mode: "directional",
+    direction: [0, -1, 0],
+    ambient: [0.1, 0.2, 0.3],
+    intensity: 2,
+  };
+  const duplicate = duplicateLight(source, [source, { name: "Lamp copy" }]);
+  assert.equal(duplicate.name, "Lamp copy 2");
+  assert.equal(duplicate.created, true);
+  assert.equal(duplicate.mode, "directional");
+  assert.equal(duplicate.on, false);
+  assert.equal("variable" in duplicate, false);
+  assert.equal("source" in duplicate, false);
+  duplicate.position[0] = 9;
+  duplicate.direction[1] = -3;
+  duplicate.color[0] = 0;
+  duplicate.ambient[0] = 1;
+  assert.deepEqual(source.position, [1, 2, 3]);
+  assert.deepEqual(source.direction, [0, -1, 0]);
+  assert.deepEqual(source.color, [1, 0.5, 0]);
+  assert.deepEqual(source.ambient, [0.1, 0.2, 0.3]);
 });
 
 test("packs the desktop light limit without mutating inputs", () => {

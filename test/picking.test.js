@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickModel } from "../src/picking.js";
+import { pickModel, pickModelHit } from "../src/picking.js";
 import { modelBounds } from "../src/camera-controls.js";
 
 function triangle(z, x = 0) {
@@ -70,6 +70,22 @@ test("picking selects the nearest visible triangle and respects viewport bounds"
   assert.equal(pickModel(renderer, models, 110, 70), 0);
   assert.equal(pickModel(renderer, models, 10, 20), null);
   assert.equal(pickModel(renderer, models, 0, 70), null);
+});
+
+test("detailed picking reports the nearest triangle while model picking stays compatible", () => {
+  const first = triangle(0),
+    second = triangle(2);
+  const model = {
+    vertices: new Float32Array([...first.vertices, ...second.vertices]),
+    triangles: new Uint32Array([0, 1, 2, 0, 3, 4, 5, 0]),
+  };
+  const models = [model],
+    renderer = camera(models);
+  assert.deepEqual(pickModelHit(renderer, models, 110, 70), {
+    index: 0,
+    triangleIndex: 1,
+  });
+  assert.equal(pickModel(renderer, models, 110, 70), 0);
 });
 
 test("picking uses reflected model X, camera orientation, clipping and inside bounds", () => {
