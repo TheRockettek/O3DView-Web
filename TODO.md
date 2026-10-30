@@ -10,6 +10,8 @@ an item complete. Paths below are relative to this file.
 
 - O3D/RDY and OBJ loading; selected CFG/SCO/BUS/OVH mesh references; all LODs;
   case-insensitive texture lookup; drag-and-drop and folder selection.
+- Version 4+ O3D encrypted-vertex decoding for the key/options variant used by
+  OpenBusTest; this is format-specific vertex recovery, not general encryption.
 - Map scenery objects and profile-based map splines with position and heading. Interior
   lights, selected material overrides and maps, manual material/visibility
   variables, CTI/CTC repaint selection, mesh and parent-group visibility, and
@@ -193,8 +195,10 @@ These features are not necessarily equivalent in all cases. See
   Desktop-style back-face culling is available as an opt-in and affects
   viewport picking; compare winding and material behavior on real assets.
   Document or address format differences where desktop actually supports them;
-  web currently documents unsupported color-mapped TGA and DDS
-  DX10/cubemaps/volumes. Desktop:
+  the web decoder supports indexed and 15/16/24/32-bit truecolor TGA images
+  and currently documents DDS DX10/cubemaps/volumes as unsupported. Compare
+  TGA palette depths and alpha behavior against representative desktop-loaded
+  assets. Desktop:
   [fragment shader](../O3DView/O3DView/Shaders/main_frag.glsl),
   [texture manager](../O3DView/O3DView/TextureManager.cs);
   web: [renderer](src/renderer.js), [WebGL renderer](src/webgl-renderer.js).
@@ -216,8 +220,11 @@ These features are not necessarily equivalent in all cases. See
 ## Boundaries: do not count unsupported desktop features as parity gaps
 
 - The public desktop build does not provide general encrypted O3D support;
-  encryption/decryption depends on conditional build support. Do not claim
-  public-build parity requires encryption.
+  encryption/decryption depends on conditional build support. The web decoder
+  handles the specific version 4+ encrypted-vertex variant used by
+  [OpenBusTest](https://github.com/TheRockettek/OpenBusTest); this is not
+  general-purpose decryption or a claim that the public desktop build supports
+  the same variant.
 - Desktop map terrain, water and several attachment branches are placeholders;
   the web parser retaining these records does not mean they are rendered in
   either viewer. Implementing them would be an enhancement, not established

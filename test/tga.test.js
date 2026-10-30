@@ -8,23 +8,32 @@ function fixture({
   type = 2,
   depth = 24,
   descriptor = 0,
+  colorMapStart = 0,
+  colorMapLength = 0,
+  colorMapDepth = 0,
+  colorMap = [],
   id = [],
   payload = [],
   trailing = [],
 } = {}) {
   const bytes = new Uint8Array(
-    18 + id.length + payload.length + trailing.length,
+    18 + id.length + colorMap.length + payload.length + trailing.length,
   );
   const view = new DataView(bytes.buffer);
   bytes[0] = id.length;
+  bytes[1] = colorMapLength ? 1 : 0;
   bytes[2] = type;
+  view.setUint16(3, colorMapStart, true);
+  view.setUint16(5, colorMapLength, true);
+  bytes[7] = colorMapDepth;
   view.setUint16(12, width, true);
   view.setUint16(14, height, true);
   bytes[16] = depth;
   bytes[17] = descriptor;
   bytes.set(id, 18);
-  bytes.set(payload, 18 + id.length);
-  bytes.set(trailing, 18 + id.length + payload.length);
+  bytes.set(colorMap, 18 + id.length);
+  bytes.set(payload, 18 + id.length + colorMap.length);
+  bytes.set(trailing, 18 + id.length + colorMap.length + payload.length);
   return bytes.buffer;
 }
 
@@ -66,6 +75,27 @@ test("decodes BGR and BGRA, IDs, extra bytes and straight alpha", () => {
     [...decodeTGA(fixture({ descriptor: 8, payload: [3, 2, 1] })).data],
     [1, 2, 3, 255],
   );
+});
+
+test("decodes 15- and 16-bit truecolor including optional alpha", () => {
+  const rgb15 = decodeTGA(
+    fixture({ depth: 15, payload: [0x1f, 0x7c] }),
+  );
+  assert.deepEqual([...rgb15.data], [255, 0, 255, 255]);
+
+  const rgb16 = decodeTGA(
+    fixture({ depth: 16, payload: [0xe0, 0x03] }),
+  );
+  assert.deepEqual([...rgb16.data], [0, 255, 0, 255]);
+
+  const rgba16 = decodeTGA(
+    fixture({ depth: 16, descriptor: 1, payload: [0x00, 0xfc] }),
+  );
+  assert.deepEqual([...rgba16.data], [255, 0, 0, 255]);
+  const transparent16 = decodeTGA(
+    fixture({ depth: 16, descriptor: 1, payload: [0x00, 0x7c] }),
+  );
+  assert.deepEqual([...transparent16.data], [255, 0, 0, 0]);
 });
 
 test("normalizes all four origins for non-square images", () => {
@@ -142,6 +172,57 @@ test("decodes uncompressed and RLE grayscale with and without alpha", () => {
   );
 });
 
+test("decodes indexed TGA images with palette origins, alpha, and RLE", () => {
+  const raw = decodeTGA(
+    fixture({
+      type: 1,
+      width: 3,
+      depth: 8,
+      colorMapStart: 5,
+      colorMapLength: 3,
+      colorMapDepth: 32,
+      colorMap: [3, 2, 1, 255, 6, 5, 4, 128, 9, 8, 7, 0],
+      payload: [5, 6, 7],
+    }),
+  );
+  assert.deepEqual(
+    [...raw.data],
+    [1, 2, 3, 255, 4, 5, 6, 128, 7, 8, 9, 0],
+  );
+
+  const rgb15 = decodeTGA(
+    fixture({
+      type: 1,
+      depth: 8,
+      colorMapLength: 1,
+      colorMapDepth: 15,
+      colorMap: [0x1f, 0x7c],
+      payload: [0],
+    }),
+  );
+  assert.deepEqual([...rgb15.data], [255, 0, 255, 255]);
+
+  const rle = decodeTGA(
+    fixture({
+      type: 9,
+      width: 4,
+      depth: 16,
+      descriptor: 0x20 | 1,
+      colorMapStart: 256,
+      colorMapLength: 2,
+      colorMapDepth: 16,
+      colorMap: [0x00, 0xfc, 0x1f, 0],
+      payload: [0x81, 0, 1, 0x01, 0, 1, 1, 1],
+    }),
+  );
+  assert.deepEqual(
+    [...rle.data],
+    [
+      255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 0,
+    ],
+  );
+});
+
 test("uses TGA 2 extension to unpremultiply colors and bounds pixel data", () => {
   const encoded = fixture({
     width: 2,
@@ -172,9 +253,9 @@ test("rejects unsupported and malformed headers", () => {
   assert.throws(() => decodeTGA(new ArrayBuffer(17)), /Truncated.*header/);
   for (const [offset, value, pattern] of [
     [1, 1, /color map/],
-    [2, 1, /image type/],
+    [2, 4, /image type/],
     [2, 0, /image type/],
-    [16, 16, /depth/],
+    [16, 64, /depth/],
     [17, 0x40, /interleav/],
     [17, 1, /attribute/],
   ]) {
@@ -182,7 +263,43 @@ test("rejects unsupported and malformed headers", () => {
     new DataView(buffer).setUint8(offset, value);
     assert.throws(() => decodeTGA(buffer), pattern);
   }
+  assert.throws(
+    () => decodeTGA(fixture({ depth: 16, descriptor: 8, payload: [0, 0] })),
+    /attribute/,
+  );
   assert.throws(() => decodeTGA(fixture({ type: 3, depth: 24 })), /depth/);
+  assert.throws(
+    () => decodeTGA(fixture({ type: 1, depth: 8, payload: [0] })),
+    /no color map/,
+  );
+  assert.throws(
+    () =>
+      decodeTGA(
+        fixture({
+          type: 1,
+          depth: 8,
+          colorMapStart: 10,
+          colorMapLength: 1,
+          colorMapDepth: 24,
+          colorMap: [0, 0, 0],
+          payload: [9],
+        }),
+      ),
+    /index is out of range/,
+  );
+  assert.throws(
+      () =>
+        decodeTGA(
+          fixture({
+            type: 1,
+            depth: 8,
+            colorMapLength: 1,
+            colorMapDepth: 24,
+            colorMap: [0, 0],
+          }),
+        ),
+      /Truncated.*color map/,
+  );
   assert.throws(() => decodeTGA(fixture({ width: 0 })), /dimensions/);
   assert.throws(() => decodeTGA(fixture({ height: 0 })), /dimensions/);
   assert.throws(

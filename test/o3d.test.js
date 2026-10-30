@@ -124,18 +124,51 @@ test("missing sections use original defaults, and repeated sections replace earl
   assert.equal(parseO3D(w.buffer()).vertices.length, 0);
 });
 
-test("rejects invalid input, header, encryption, and unknown sections", () => {
+test("rejects invalid input, header, and unknown sections", () => {
   assert.throws(() => parseO3D(new Uint8Array(4)), /ArrayBuffer/);
   assert.throws(() => parseO3D(new ArrayBuffer(0)), /truncated header/);
   assert.throws(
     () => parseO3D(new Writer().u16(0).u8(3).buffer()),
     /invalid header/,
   );
-  assert.throws(() => parseO3D(header(7, 0, 0).buffer()), /encrypted/);
   assert.throws(
     () => parseO3D(header().u8(0xee).buffer()),
     /unknown section 0xee at offset 0x3/,
   );
+});
+
+test("decodes encrypted O3D vertices and accepts both unencrypted key markers", () => {
+  const encrypted = header(7, 0x2, 0).u8(0x17).u32(1);
+  for (const value of [1, 2, 3, -1, -2, -3, 0.25, 0.5])
+    encrypted.f32(value);
+  const model = parseO3D(encrypted.buffer());
+  assert.equal(model.encryptionKey, 0);
+  assert.deepEqual([...model.vertices], [2, 1, 3, 1, -3, -2, 0.25, 0.5]);
+
+  for (const key of [0xffff, 0xffffffff]) {
+    const sentinel = header(7, 0x2, key).u8(0x17).u32(1);
+    for (const value of [1, 2, 3, -1, -2, -3, 0.25, 0.5])
+      sentinel.f32(value);
+    assert.deepEqual(
+      [...parseO3D(sentinel.buffer()).vertices],
+      [1, 2, 3, -1, -2, -3, 0.25, 0.5],
+    );
+  }
+});
+
+test("applies encrypted O3D key-dependent UV and normal recovery", () => {
+  for (const [key, expected] of [
+    [302, [2, 1, 3, -1, -3, -2, 0.2475, 0.5]],
+    [303, [2, 1, 3, -1, -3, 2, 0.25, 0.4856]],
+  ]) {
+    const encrypted = header(7, 0, key).u8(0x17).u32(1);
+    for (const value of [1, 2, 3, -1, -2, -3, 0.25, 0.5])
+      encrypted.f32(value);
+    assert.deepEqual(
+      [...parseO3D(encrypted.buffer()).vertices],
+      [...new Float32Array(expected)],
+    );
+  }
 });
 
 test("rejects excessive counts before allocation", () => {

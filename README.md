@@ -32,6 +32,10 @@ outside the selected folder, select a common parent folder. Browser file
 access is restricted to what you explicitly select; your models are read
 locally and are not uploaded or cached by the app. Left-drag to orbit, right-
 or middle-drag to pan, and scroll to zoom. Fit view recenters the scene.
+Version 4+ O3D files using the encrypted-vertex variant recognized by
+[OpenBusTest](https://github.com/TheRockettek/OpenBusTest) are decoded from
+their header key and options. This variant obfuscates vertex position, normal
+and UV components; it is not general-purpose or cryptographic decryption.
 Focus the viewport and use the arrow keys to pan in camera space; movement
 scales with the current zoom. The web and WebGL renderers use the same camera
 controls.
@@ -165,9 +169,10 @@ opacity.
 
 ### O3D export
 
-The selected model can also be downloaded as an unencrypted O3D. For an O3D
-input, the default preserves the source version, extended options, bones and
-stored transform; for OBJ input it uses version 7 with long indices. Version 7
+The selected model can also be downloaded as an unencrypted O3D. Encrypted
+vertex data is exported in its decoded form, not re-encrypted. For an O3D input,
+the default preserves the source version, extended options, bones and stored
+transform; for OBJ input it uses version 7 with long indices. Version 7
 with long indices and version 3 with short indices can also be selected
 explicitly. Version 3 cannot represent more than 65,535 vertices or triangles,
 or long indices; choose version 7 if the export reports a size limit. Current
@@ -281,7 +286,8 @@ Diffuse textures are resolved from the selected files using the desktop
 viewer’s model and ancestor `texture` folders (DDS takes precedence). PNG,
 JPEG, BMP, GIF and WebP support depends on browser decoding. Legacy 2D
 DDS RGB(A), A8 and DXT1 through DXT5 images are decoded locally, as are
-uncompressed and RLE truecolor and grayscale TGA images. BMP, PNG and JPEG
+uncompressed and RLE indexed, 15/16/24/32-bit truecolor, and grayscale TGA
+images. BMP, PNG and JPEG
 files named `.dds` are recognized by their contents. Unsupported,
 unreadable or missing textures produce warnings. Select a folder when the
 model refers to other files. CFG material maps use the configuration's
