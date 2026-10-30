@@ -45,17 +45,32 @@ test("duplicated lights are independent scene lights without source bindings", (
 });
 
 test("packs the desktop light limit without mutating inputs", () => {
-  const lights = Array.from({ length: 16 }, () => light());
+  const lights = Array.from({ length: 17 }, (_light, index) => ({
+    ...light(),
+    position: [index, 2, 3],
+  }));
   lights[1].on = false;
   const packed = encodeInteriorLights(lights);
-  assert.equal(MAX_INTERIOR_LIGHTS, 15);
-  assert.deepEqual([...packed.positions.slice(0, 4)], [1, 2, 3, 4]);
+  assert.equal(MAX_INTERIOR_LIGHTS, 16);
+  assert.deepEqual([...packed.positions.slice(0, 4)], [0, 2, 3, 4]);
+  assert.deepEqual([...packed.positions.slice(60, 64)], [15, 2, 3, 4]);
   assert.deepEqual(
     [...packed.colors.slice(0, 8)],
     [1, 0.5, 0, 1, 1, 0.5, 0, 0],
   );
-  assert.equal(packed.positions.length, 60);
-  assert.equal(lights.length, 16);
+  assert.equal(packed.positions.length, 64);
+  assert.equal(packed.positions.includes(16), false);
+  assert.equal(lights.length, 17);
+  const limited = encodeInteriorLights(lights, 2);
+  assert.deepEqual([...limited.positions.slice(0, 8)], [
+    0, 2, 3, 4,
+    1, 2, 3, 4,
+  ]);
+  assert.equal(limited.positions.slice(8).every((value) => value === 0), true);
+  assert.equal(limited.colors.slice(8).every((value) => value === 0), true);
+  for (const limit of [-1, 1.5, 17, NaN]) {
+    assert.throws(() => encodeInteriorLights(lights, limit), /Light limit/);
+  }
   assert.throws(
     () => encodeInteriorLights([light(), { ...light(), range: Infinity }]),
     /index 1/,
@@ -132,6 +147,14 @@ for (const [name, create] of [
   ["WebGPU", () => new Renderer({}, {})],
   ["WebGL", () => new WebGLRenderer({}, { isContextLost: () => false })],
 ]) {
+  test(`${name} honors a configurable scene-light limit`, () => {
+    const renderer = create();
+    renderer._requestFrame = () => {};
+    renderer.setLights([light(), light()], 1);
+    assert.equal(renderer._lights.colors[3], 1);
+    assert.equal(renderer._lights.colors.slice(4).every((value) => value === 0), true);
+    assert.throws(() => renderer.setLights([light()], 17), /Light limit/);
+  });
   test(`${name} updates lights atomically and schedules a redraw`, () => {
     const renderer = create();
     let frames = 0;

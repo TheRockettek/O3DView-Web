@@ -4,8 +4,9 @@ import {
   focusModel,
   selectionPulse,
   animateSelection,
+  wheelZoom,
 } from "./camera-controls.js";
-import { encodeInteriorLights } from "./light-data.js";
+import { encodeInteriorLights, MAX_INTERIOR_LIGHTS } from "./light-data.js";
 
 // O3D coordinates are reflected on X and triangle winding is reversed, as in renderer.js.
 const VERTEX_SHADER = `#version 300 es
@@ -61,9 +62,9 @@ uniform bool fullbright;
 uniform bool selected;
 uniform float selectionPulse;
 uniform bool cutout;
-uniform vec4 pointPositions[15];
-uniform vec4 pointColors[15];
-uniform vec4 pointAmbients[15];
+uniform vec4 pointPositions[16];
+uniform vec4 pointColors[16];
+uniform vec4 pointAmbients[16];
 uniform bool useDesktopSun;
 uniform vec4 sunPosition;
 uniform vec4 sunColor;
@@ -103,10 +104,10 @@ void main() {
   if (!fullbright) {
     color = useDesktopSun ? vec3(0.0) : albedo.rgb * (0.25 + 0.75 * diffuseLight) +
       specularPower.rgb * specular * 0.5;
-  for (int i = 0; i < 16; i++) {
-    vec4 position = i == 15 ? sunPosition : pointPositions[i];
-    vec4 pointColor = i == 15 ? sunColor : pointColors[i];
-    vec3 ambient = i == 15 ? sunAmbient.rgb : pointAmbients[i].rgb;
+  for (int i = 0; i < 17; i++) {
+    vec4 position = i == 16 ? sunPosition : pointPositions[i];
+    vec4 pointColor = i == 16 ? sunColor : pointColors[i];
+    vec3 ambient = i == 16 ? sunAmbient.rgb : pointAmbients[i].rgb;
     vec3 delta = position.xyz - worldPosition;
     float distanceSquared = dot(delta, delta);
     if (pointColor.w > 2.5 && pointColor.w < 3.5) {
@@ -335,7 +336,7 @@ export class WebGLRenderer {
     this._draws = [];
     this._modelVisibility = [];
     this._wireframe = false;
-    this._cullBackfaces = false;
+    this._cullBackfaces = true;
     this._fullbright = false;
     this._modelBounds = [];
     this._selectedModel = null;
@@ -529,22 +530,13 @@ export class WebGLRenderer {
     this._pointerMove = controls.move;
     this._pointerUp = controls.up;
     this._keyDown = controls.keyDown;
+    this._keyUp = controls.keyUp;
+    this._blur = controls.blur;
+    this._disposeControls = controls.dispose;
     this._contextMenu = controls.contextMenu;
     this._wheel = (event) => {
       event.preventDefault();
-      const pixels =
-        event.deltaY *
-        (event.deltaMode === 1
-          ? 16
-          : event.deltaMode === 2
-            ? this.canvas.clientHeight || 800
-            : 1);
-      this._distance = clamp(
-        this._distance * Math.exp(clamp(pixels * 0.001, -2, 2)),
-        this._viewRadius * 0.001,
-        this._viewRadius * 10000,
-      );
-      this._requestFrame();
+      wheelZoom(this, event);
     };
     this._resize = () => this._requestFrame();
     for (const [name, handler] of this._eventHandlers())
@@ -724,9 +716,9 @@ export class WebGLRenderer {
     this._requestFrame();
   }
 
-  setLights(lights) {
+  setLights(lights, limit = MAX_INTERIOR_LIGHTS) {
     this._assertUsable();
-    this._lights = encodeInteriorLights(lights);
+    this._lights = encodeInteriorLights(lights, limit);
     this._requestFrame();
   }
 
@@ -1082,6 +1074,7 @@ export class WebGLRenderer {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this._disposeControls?.();
     if (this._frame !== null) cancelAnimationFrame(this._frame);
     this._frame = null;
     this._observer?.disconnect();

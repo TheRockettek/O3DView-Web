@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   collectSceneVariables,
+  initializeSceneVariableDefaults,
   updateSceneVariable,
+  updateSceneStringVariable,
 } from "../src/scene-variables.js";
 
 test("variables group matching names across materials and both bindings", () => {
@@ -16,7 +18,7 @@ test("variables group matching names across materials and both bindings", () => 
   assert.deepEqual(
     variables.map((v) => [v.name, v.value, v.bindings.length]),
     [
-      ["lights", 1, 2],
+      ["lights", 0, 2],
       ["Lights", 1, 1],
     ],
   );
@@ -40,6 +42,222 @@ test("variables group matching names across materials and both bindings", () => 
       [0, 1],
     ],
   );
+});
+
+test("lightmap-bound variables default to zero and alpha-scale variables to one", () => {
+  const variables = collectSceneVariables([
+    {
+      materials: [
+        { lightmapVar: "lightmap" },
+        { alphaScaleVar: "alpha" },
+      ],
+    },
+  ]);
+  assert.deepEqual(
+    variables.map(({ name, value }) => [name, value]),
+    [
+      ["lightmap", 0],
+      ["alpha", 1],
+    ],
+  );
+});
+
+test("exposes texcoord translation variables as desktop-default no-op floats", () => {
+  const variables = collectSceneVariables([
+    {
+      materials: [
+        { texcoordTransXVar: "scroll_x", texcoordTransYVar: "scroll_y" },
+      ],
+    },
+  ]);
+  assert.deepEqual(
+    variables.map(({ name, value, bindings }) => [
+      name,
+      value,
+      bindings.length,
+    ]),
+    [
+      ["scroll_x", 0, 0],
+      ["scroll_y", 0, 0],
+    ],
+  );
+  const calls = [];
+  updateSceneVariable(
+    { updateMaterial: (...args) => calls.push(args) },
+    variables[0],
+    2.5,
+  );
+  assert.equal(variables[0].value, 2.5);
+  assert.deepEqual(calls, []);
+});
+
+test("exposes texttexture variables as editable no-op strings", async () => {
+  const [variable] = collectSceneVariables(
+    [],
+    [],
+    [{ name: "display_text", value: "" }],
+  );
+  assert.equal(variable.stringType, true);
+  assert.equal(variable.value, "");
+  await updateSceneStringVariable({}, variable, "Route 12");
+  assert.equal(variable.value, "Route 12");
+  await updateSceneStringVariable({}, variable, "");
+  assert.equal(variable.value, "");
+  assert.throws(
+    () => updateSceneVariable({}, variable, 0.5),
+    /numeric scene variable/,
+  );
+});
+
+test("exposes desktop light brightness variables as no-op floats", () => {
+  const [variable] = collectSceneVariables(
+    [],
+    [],
+    [],
+    [{ name: "lamp_dim", value: 0.4 }],
+  );
+  assert.equal(variable.name, "lamp_dim");
+  assert.equal(variable.value, 0.4);
+  assert.deepEqual(variable.bindings, []);
+  assert.deepEqual(variable.visibilityBindings, []);
+  updateSceneVariable({}, variable, 1.25);
+  assert.equal(variable.value, 1.25);
+});
+
+test("collects free-texture bindings across matching material maps", () => {
+  const source = "vehicle/model.cfg";
+  const models = [
+    {
+      materials: [
+        {
+          textureName: "Textures/body.bmp",
+          freeTextures: [
+            {
+              path: "textures\\body.bmp",
+              varName: "paint",
+              source,
+            },
+          ],
+        },
+      ],
+    },
+    { materials: [{ transmapName: "TEXTURES/body.bmp" }] },
+  ];
+  const [variable] = collectSceneVariables(models);
+  assert.equal(variable.name, "paint");
+  assert.equal(variable.value, "textures\\body.bmp");
+  assert.equal(variable.stringType, true);
+  assert.deepEqual(
+    variable.textureBindings.map(({ modelIndex, materialIndex, map }) => [
+      modelIndex,
+      materialIndex,
+      map,
+    ]),
+    [
+      [0, 0, "texture"],
+      [1, 0, "transmap"],
+    ],
+  );
+});
+
+test("updates free-texture maps transactionally using a selected replacement", async () => {
+  const source = "vehicle/model.cfg";
+  const first = {
+    textureName: "body.bmp",
+    texture: { id: "original" },
+    textureTransparent: false,
+    freeTextures: [{ path: "body.bmp", varName: "paint", source }],
+  };
+  const second = {
+    transmapName: "body.bmp",
+    transmap: { id: "old-mask" },
+  };
+  const models = [{ materials: [first] }, { materials: [second] }];
+  const [variable] = collectSceneVariables(models);
+  const bitmap = { id: "replacement" };
+  const calls = [];
+  await updateSceneStringVariable(
+    {
+      updateMaterial(modelIndex, materialIndex, material) {
+        calls.push([modelIndex, materialIndex, { ...material }]);
+      },
+    },
+    variable,
+    "repaint/body.png",
+    async (path, name) => {
+      assert.equal(path, source);
+      assert.equal(name, "repaint/body.png");
+      return { bitmap, hasAlpha: true };
+    },
+  );
+  assert.deepEqual(calls.map(([modelIndex]) => modelIndex), [0, 1]);
+  assert.equal(first.texture, bitmap);
+  assert.equal(first.textureTransparent, true);
+  assert.equal(second.transmap, bitmap);
+  assert.equal(variable.value, "repaint/body.png");
+});
+
+test("rolls back free-texture renderer updates on failure", async () => {
+  const first = {
+    textureName: "body.bmp",
+    texture: { id: "original" },
+    freeTextures: [
+      { path: "body.bmp", varName: "paint", source: "vehicle/model.cfg" },
+    ],
+  };
+  const second = {
+    transmapName: "body.bmp",
+    transmap: { id: "old-mask" },
+  };
+  const [variable] = collectSceneVariables([
+    { materials: [first] },
+    { materials: [second] },
+  ]);
+  const calls = [];
+  await assert.rejects(
+    updateSceneStringVariable(
+      {
+        updateMaterial(modelIndex, materialIndex, material) {
+          calls.push([modelIndex, materialIndex, material.texture ?? material.transmap]);
+          if (modelIndex === 1 && material.transmap?.id === "replacement")
+            throw new Error("upload failed");
+        },
+      },
+      variable,
+      "replacement",
+      async () => ({ bitmap: { id: "replacement" }, hasAlpha: false }),
+    ),
+    /upload failed/,
+  );
+  assert.deepEqual(
+    calls.map(([modelIndex]) => modelIndex),
+    [0, 1, 1, 0],
+  );
+  assert.equal(first.texture.id, "original");
+  assert.equal(second.transmap.id, "old-mask");
+  assert.equal(variable.value, "body.bmp");
+});
+
+test("initializes material, visibility, and optional light bindings from desktop defaults", () => {
+  const materials = [
+    { alphaScaleVar: "alpha", lightmapVar: "lightmap" },
+  ];
+  const models = [
+    {
+      materials,
+      visibles: [{ variable: "visibility", value: 0 }],
+    },
+    {
+      materials: [],
+      visibles: [{ variable: "visibility", value: 1 }],
+    },
+  ];
+  const lights = [{ variable: "lamp", intensity: 0.4 }];
+  const visibility = initializeSceneVariableDefaults(models, lights);
+  assert.deepEqual(visibility, [true, false]);
+  assert.equal(materials[0].alphaScale, 1);
+  assert.equal(materials[0].lightmapStrength, 0);
+  assert.equal(lights[0].intensity, 0.4);
 });
 
 test("invalid values and renderer failures do not commit variable values", () => {
@@ -74,7 +292,7 @@ test("invalid values and renderer failures do not commit variable values", () =>
     [0, 1, 1, 0],
   );
   assert.deepEqual(materials, [{ alphaScaleVar: "x" }, { lightmapVar: "x" }]);
-  assert.equal(variable.value, 1);
+  assert.equal(variable.value, 0);
 });
 
 test("failed rollback is surfaced explicitly", () => {

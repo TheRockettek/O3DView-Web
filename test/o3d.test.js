@@ -217,7 +217,7 @@ test("rejects truncated headers, section payloads, strings, and weights", () => 
 
 for (const name of ["player_standing.o3d", "player_sitting.o3d"]) {
   const path = new URL(
-    `../../O3DView/O3DView/Resources/${name}`,
+    `../O3DView/O3DView/Resources/${name}`,
     import.meta.url,
   );
   test(

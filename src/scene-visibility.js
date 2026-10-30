@@ -12,8 +12,7 @@ export function bindSceneVisibilityGroups(hierarchy, models) {
           visibilityGroups[node.modelIndex] = ancestors;
         continue;
       }
-      const groups =
-        node.type === "lod" ? ancestors : [...ancestors, node];
+      const groups = node.type === "lod" ? ancestors : [...ancestors, node];
       visit(node.children || [], groups);
     }
   }

@@ -145,7 +145,9 @@ function transformVertices(base, rotation, scale, pivot) {
         value > 0,
     )
   )
-    throw new TypeError("Scale must contain three positive finite 32-bit numbers");
+    throw new TypeError(
+      "Scale must contain three positive finite 32-bit numbers",
+    );
   const [rx, ry, rz] = rotation.map((value) => (value * Math.PI) / 180);
   const [sx, sy, sz] = scale;
   const cx = Math.cos(rx),

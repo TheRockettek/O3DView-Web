@@ -156,16 +156,14 @@ export function parseO3D(arrayBuffer) {
     enabled: encrypted,
     alternateSeed: (extendedOptions & 0x2) !== 0,
     productId: encryptionKey,
-    productIdSalt:
-      (Math.trunc(encryptionKey + version - 4) & 0xffff) || 0,
+    productIdSalt: Math.trunc(encryptionKey + version - 4) & 0xffff || 0,
     vertexCount: 0,
     salt: 0,
   };
   if (encrypted && vertexDecode.alternateSeed)
     vertexDecode.productIdSalt =
       ((vertexDecode.productIdSalt + 381) % 65000) & 0xffff;
-  else if (encrypted)
-    vertexDecode.productIdSalt %= 65000;
+  else if (encrypted) vertexDecode.productIdSalt %= 65000;
   const legacyLongCounts =
     version === 3 &&
     view.byteLength - offset >= 2 &&

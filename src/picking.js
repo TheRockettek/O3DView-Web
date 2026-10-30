@@ -6,7 +6,7 @@ const cross = (a, b) => [
 ];
 const subtract = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
-function triangleDistance(origin, direction, vertices, a, b, c, cullBackfaces) {
+function triangleDistance(origin, direction, vertices, a, b, c) {
   const point = (index) => [
     -vertices[index * 8],
     vertices[index * 8 + 1],
@@ -17,8 +17,7 @@ function triangleDistance(origin, direction, vertices, a, b, c, cullBackfaces) {
     edge2 = subtract(point(c), v0);
   const p = cross(direction, edge2),
     determinant = dot(edge1, p);
-  if (cullBackfaces ? determinant >= -1e-12 : Math.abs(determinant) < 1e-12)
-    return null;
+  if (Math.abs(determinant) < 1e-12) return null;
   const inverse = 1 / determinant,
     t = subtract(origin, v0),
     u = dot(t, p) * inverse;
@@ -119,7 +118,6 @@ export function pickModelHit(
         model.triangles[i],
         model.triangles[i + 1],
         model.triangles[i + 2],
-        renderer._cullBackfaces && !renderer._wireframe,
       );
       if (
         hit !== null &&

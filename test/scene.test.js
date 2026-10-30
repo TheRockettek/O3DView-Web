@@ -378,6 +378,11 @@ test("configuration color overrides attach to the individual mesh occurrence", a
   const config = [
     "[mesh]",
     "textured.o3d",
+    "[illumination_interior]",
+    "0",
+    "-1",
+    "-1",
+    "-1",
     "[matl]",
     "BODY.PNG",
     "0",
@@ -424,6 +429,8 @@ test("configuration color overrides attach to the individual mesh occurrence", a
   assert.equal(models[0].materials[0].alphaMode, 1);
   assert.equal(models[0].materials[0].noZCheck, true);
   assert.equal(models[0].materials[0].noZWrite, true);
+  assert.deepEqual(models[0].illuminationInterior, [0, -1, -1, -1]);
+  assert.equal(models[1].illuminationInterior, undefined);
   assert.notDeepEqual(
     models[1].materials[0].diffuse,
     models[0].materials[0].diffuse,
@@ -529,6 +536,44 @@ test("material variable names follow matching mesh and material occurrences", as
   data[start + 1] = 2;
   const twoMaterials = Uint8Array.from([...data, ...data.slice(start + 3)]);
   const config = [
+    "[light_enh_2]",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "1",
+    "0",
+    "1",
+    "0",
+    "0",
+    "0",
+    "255",
+    "255",
+    "255",
+    "1",
+    "30",
+    "60",
+    "lamp_dim",
+    "0.4",
+    "[texttexture_enh]",
+    "display_text",
+    "Arial",
+    "256",
+    "64",
+    "0",
+    "1",
+    "1",
+    "1",
+    "[texttexture_enh]",
+    "display_text",
+    "Arial",
+    "256",
+    "64",
+    "0",
+    "1",
+    "1",
+    "1",
     "[mesh]",
     "textured.o3d",
     "[matl]",
@@ -539,10 +584,17 @@ test("material variable names follow matching mesh and material occurrences", as
     "[matl_lightmap]",
     "light.png",
     "interior",
+    "[matl_freetex]",
+    "body.png",
+    "paint",
+    "[texcoordtransx]",
+    "shift_x",
+    "[texcoordtransy]",
+    "shift_y",
     "[mesh]",
     "textured.o3d",
   ].join("\n");
-  const { models, warnings } = await loadScene(
+  const result = await loadScene(
     [
       file("vehicle.cfg", config),
       file("textured.o3d", twoMaterials),
@@ -552,10 +604,23 @@ test("material variable names follow matching mesh and material occurrences", as
     ["vehicle.cfg"],
     { decodeTexture: async () => ({ bitmap: {}, hasAlpha: false }) },
   );
+  const { models, warnings } = result;
   assert.equal(models[0].materials[0].alphaScaleVar, undefined);
   assert.equal(models[0].materials[1].alphaScaleVar, "fade");
   assert.equal(models[0].materials[1].lightmapVar, "interior");
+  assert.equal(models[0].materials[1].lightmapStrength, 0);
+  assert.deepEqual(models[0].materials[1].freeTextures, [
+    { path: "body.png", varName: "paint", source: "vehicle.cfg" },
+  ]);
+  assert.equal(models[0].materials[1].texcoordTransXVar, "shift_x");
+  assert.equal(models[0].materials[1].texcoordTransYVar, "shift_y");
   assert.equal(models[1].materials[1].alphaScaleVar, undefined);
+  assert.deepEqual(result.stringVariables, [
+    { name: "display_text", value: "" },
+  ]);
+  assert.deepEqual(result.floatVariables, [
+    { name: "lamp_dim", value: Math.fround(0.4) },
+  ]);
   assert.deepEqual(warnings, []);
 });
 

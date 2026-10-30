@@ -2,10 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { duplicateLight, encodeInteriorLights } from "../src/light-data.js";
+import { parseO3D } from "../src/o3d.js";
+import { bindSceneVisibilityGroups } from "../src/scene-visibility.js";
+import { initializeSceneVariableDefaults } from "../src/scene-variables.js";
 import {
-  bindSceneVisibilityGroups,
   canContainSceneNode,
   containsSceneNode,
+  deletableSceneModelIndices,
   findSceneNodeParent,
   moveSceneNode,
   reparentSceneNode,
@@ -15,8 +18,12 @@ import { focusPosition } from "../src/camera-controls.js";
 import {
   CABIN_MARKER_TRIANGLE_COUNT,
   CABIN_PATH_LINK_TRIANGLE_COUNT,
+  cabinMarkerIcon,
+  cabinMarkerExportModel,
   cabinPathPointWorldPosition,
   updateCabinMarkerPosition,
+  updateCabinSeatProperties,
+  updateCabinSeatPreview,
 } from "../src/cabin-path.js";
 
 class Element {
@@ -80,6 +87,28 @@ test("scene selection and applied material edits reach export; failures appear i
     },
   };
   const get = (id) => document.getElementById(id);
+  const originalFetch = globalThis.fetch;
+  const seatPreviewFiles = new Map(
+    await Promise.all(
+      ["player_standing.o3d", "player_sitting.o3d"].map(async (name) => [
+        name,
+        await readFile(
+          new URL(`../O3DView/O3DView/Resources/${name}`, import.meta.url),
+        ),
+      ]),
+    ),
+  );
+  globalThis.fetch = async (input) => {
+    const name = new URL(input).pathname.split("/").at(-1);
+    const data = seatPreviewFiles.get(name);
+    if (!data) throw new Error(`Unexpected preview asset request: ${input}`);
+    return {
+      ok: true,
+      status: 200,
+      arrayBuffer: async () =>
+        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    };
+  };
   get("entry").disabled = true;
   get("export-obj").disabled = true;
   get("export-mtl").disabled = true;
@@ -96,6 +125,7 @@ test("scene selection and applied material edits reach export; failures appear i
       vertices: new Float32Array(8),
       triangles: new Uint32Array(4),
       materials: [material()],
+      illuminationInterior: [0],
     },
     {
       name: "same.o3d",
@@ -121,11 +151,23 @@ test("scene selection and applied material edits reach export; failures appear i
       type: "configuration",
       name: "model.cfg",
       children: [
-        { type: "model", modelIndex: 0, children: [] },
+        {
+          type: "model",
+          modelIndex: 0,
+          sourceName: "same.o3d",
+          children: [],
+        },
         {
           type: "lod",
           name: "LOD 0.8",
-          children: [{ type: "model", modelIndex: 1, children: [] }],
+          children: [
+            {
+              type: "model",
+              modelIndex: 1,
+              sourceName: "same.o3d",
+              children: [],
+            },
+          ],
         },
         {
           type: "lights",
@@ -284,15 +326,18 @@ test("scene selection and applied material edits reach export; failures appear i
   };
   globalThis.document = document;
   globalThis.window = { addEventListener() {} };
+  globalThis.localStorage = { getItem: () => null, setItem() {} };
   globalThis.__appTestDeps = {
     createRenderer: async (canvas) => ({ renderer, canvas, backend: "test" }),
     loadScene: async () => sceneResult,
+    parseO3D,
     decodeConfiguration() {},
     listCommands: () => [],
     collectSceneVariables: (_models, lights) => {
       collectedLights.push(lights);
       return [];
     },
+    initializeSceneVariableDefaults,
     updateSceneVariable() {},
     changeViewpoint() {},
     changeGizmoVisibility() {},
@@ -313,19 +358,24 @@ test("scene selection and applied material edits reach export; failures appear i
     viewpointAllows: () => true,
     captureDrop() {},
     readDroppedFiles() {},
-    MAX_INTERIOR_LIGHTS: 15,
+    MAX_INTERIOR_LIGHTS: 16,
     duplicateLight,
     bindSceneVisibilityGroups,
     canContainSceneNode,
     containsSceneNode,
+    deletableSceneModelIndices,
     findSceneNodeParent,
     moveSceneNode,
     reparentSceneNode,
     restoreSceneNodeParent,
     CABIN_MARKER_TRIANGLE_COUNT,
     CABIN_PATH_LINK_TRIANGLE_COUNT,
+    cabinMarkerIcon,
+    cabinMarkerExportModel,
     cabinPathPointWorldPosition,
     updateCabinMarkerPosition,
+    updateCabinSeatProperties,
+    updateCabinSeatPreview,
     updateNightStrength() {},
     createRepaintSession: () => repaint,
     enhanceDropdowns() {},
@@ -345,6 +395,14 @@ test("scene selection and applied material edits reach export; failures appear i
     },
     updateCabinPathPoint: (_state, _index, position) => {
       hierarchy[0].children[3].children[1].info.position = position;
+      return [];
+    },
+    updateCabinPathReference: (state, item, pathPoint) => {
+      item.pathPoint = pathPoint;
+      if (
+        ["entry", "exit", "linktonextveh", "linktoprevveh"].includes(item.kind)
+      )
+        item.position = state.paths.points[pathPoint];
       return [];
     },
     updateCabinPathLink: (_state, _index, changes) => {
@@ -369,12 +427,19 @@ test("scene selection and applied material edits reach export; failures appear i
     },
   };
   try {
+    const appUrl = new URL("../src/app.js", import.meta.url).href;
     const source = (
       await readFile(new URL("../src/app.js", import.meta.url), "utf8")
-    ).replace(/^import[\s\S]*?;\r?\n/gm, "");
+    )
+      .replace(/^import[\s\S]*?;\r?\n/gm, "")
+      .replaceAll(
+        "new URL(path, import.meta.url)",
+        `new URL(path, ${JSON.stringify(appUrl)})`,
+      )
+      .replaceAll("import.meta.url", JSON.stringify(appUrl));
     assert.doesNotMatch(source, /^import\s/m);
     const prefix =
-      "const { createRenderer, loadScene, decodeConfiguration, listCommands, collectSceneVariables, updateSceneVariable, changeViewpoint, changeLodVisibility, changeGizmoVisibility, bindSceneVisibilityGroups, isModelVisible, viewpointAllows, captureDrop, readDroppedFiles, downloadWavefront, downloadO3D, combineSceneModels, MAX_INTERIOR_LIGHTS, duplicateLight, canContainSceneNode, containsSceneNode, findSceneNodeParent, moveSceneNode, reparentSceneNode, restoreSceneNodeParent, CABIN_MARKER_TRIANGLE_COUNT, CABIN_PATH_LINK_TRIANGLE_COUNT, updateNightStrength, createRepaintSession, enhanceDropdowns, syncDropdown, pickModelHit, projectWorldPosition, translateSceneModel, updateCabinPathPoint, updateCabinPathLink, updateCabinMarkerPosition, focusModels, focusPosition, cabinPathPointWorldPosition } = globalThis.__appTestDeps;\n";
+      "const { createRenderer, loadScene, parseO3D, decodeConfiguration, listCommands, collectSceneVariables, initializeSceneVariableDefaults, updateSceneVariable, changeViewpoint, changeLodVisibility, changeGizmoVisibility, bindSceneVisibilityGroups, isModelVisible, viewpointAllows, captureDrop, readDroppedFiles, downloadWavefront, downloadO3D, combineSceneModels, MAX_INTERIOR_LIGHTS, duplicateLight, canContainSceneNode, containsSceneNode, deletableSceneModelIndices, findSceneNodeParent, moveSceneNode, reparentSceneNode, restoreSceneNodeParent, CABIN_MARKER_TRIANGLE_COUNT, CABIN_PATH_LINK_TRIANGLE_COUNT, cabinMarkerIcon, cabinMarkerExportModel, updateNightStrength, createRepaintSession, enhanceDropdowns, syncDropdown, pickModelHit, projectWorldPosition, translateSceneModel, updateCabinPathPoint, updateCabinPathReference, updateCabinPathLink, updateCabinMarkerPosition, updateCabinSeatProperties, updateCabinSeatPreview, focusModels, focusPosition, cabinPathPointWorldPosition } = globalThis.__appTestDeps;\n";
     await import(
       `data:text/javascript;base64,${Buffer.from(prefix + source).toString("base64")}`
     );
@@ -383,7 +448,7 @@ test("scene selection and applied material edits reach export; failures appear i
     await get("model-files").emit("change");
     await get("open").emit("click");
     const modelInspect =
-      get("scene-list").children[0].children[0].children[1].children[0]
+      get("scene-list").children[1].children[0].children[1].children[0]
         .children[1];
     await modelInspect.emit("click");
     assert.match(get("scene-group-info").textContent, /Model source: same\.o3d/);
@@ -392,6 +457,12 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.match(get("scene-group-info").textContent, /Materials: 1/);
     get("show-light-references").checked = true;
     await get("show-light-references").emit("change");
+    assert.equal(
+      get("light-reference-layer").children.filter(
+        (child) => child.className === "light-reference-line",
+      ).length,
+      1,
+    );
     const lightReference = get("light-reference-layer").children[0];
     assert.equal(lightReference.style.left, "30px");
     assert.equal(lightReference.style.top, "40px");
@@ -410,7 +481,7 @@ test("scene selection and applied material edits reach export; failures appear i
     await get("viewport").emit("pointerup", groupPointer);
     assert.match(get("scene-group-info").textContent, /Type: configuration/);
     const cabinInspect =
-      get("scene-list").children[0].children[0].children[1].children[3]
+      get("scene-list").children[1].children[0].children[1].children[3]
         .children[0].children[1].children[0].children[1];
     await cabinInspect.emit("click");
     assert.match(get("cabin-info").textContent, /cabin\.cfg:12/);
@@ -457,7 +528,7 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.match(get("status").textContent, /renamed for this scene/);
     assert.equal(get("cabin-point-form").hidden, true);
     const pointInspect =
-      get("scene-list").children[0].children[0].children[1].children[3]
+      get("scene-list").children[1].children[0].children[1].children[3]
         .children[0].children[1].children[1].children[1];
     await pointInspect.emit("click");
     assert.equal(get("cabin-point-form").hidden, false);
@@ -477,7 +548,7 @@ test("scene selection and applied material edits reach export; failures appear i
       /Centered the view on the selected cabin path point/,
     );
     const linkInspect =
-      get("scene-list").children[0].children[0].children[1].children[3]
+      get("scene-list").children[1].children[0].children[1].children[3]
         .children[0].children[1].children[2].children[1];
     await linkInspect.emit("click");
     assert.equal(get("cabin-point-form").hidden, true);
@@ -546,7 +617,7 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.equal(get("repaint-select").value, "0");
     assert.equal(get("repaint-select").disabled, false);
     assert.equal(
-      get("scene-list").children[0].children[0].children[0].textContent,
+      get("scene-list").children[1].children[0].children[0].textContent,
       "model.cfg",
     );
     get("scene-search").value = "not-present";
@@ -558,10 +629,10 @@ test("scene selection and applied material edits reach export; failures appear i
     get("scene-search").value = "";
     await get("scene-search").emit("input");
     const lodToggle = () =>
-      get("scene-list").children[0].children[0].children[1].children[1]
+      get("scene-list").children[1].children[0].children[1].children[1]
         .children[0].children[0].children[0];
     const groupSummary = () =>
-      get("scene-list").children[0].children[0].children[1].children[1]
+      get("scene-list").children[1].children[0].children[1].children[1]
         .children[0].children[0];
     const groupButton = groupSummary().children[3];
     await groupButton.emit("click", { stopPropagation() {} });
@@ -761,14 +832,17 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.equal(lods[0].visible, false);
     get("lod-radius").value = "0.8";
     await get("lod-apply").emit("click");
-    assert.deepEqual(calls.shift(), { lodChanges: [[lods[0], true]] });
-    assert.equal(lods[0].visible, true);
+    assert.deepEqual(calls.shift(), { lodChanges: [[lods[0], false]] });
+    assert.equal(lods[0].visible, false);
     get("lod-radius").value = "0.5";
     await get("lod-apply").emit("click");
     assert.deepEqual(calls.shift(), { lodChanges: [[lods[0], false]] });
     assert.equal(lods[0].visible, false);
+    await groupSummary().children[2].emit("click", { stopPropagation() {} });
     get("scene-group-lod-radius").value = "0.3";
     await get("scene-group-lod-form").emit("submit");
+    assert.equal(lods[0].viewRadius, Math.fround(0.3));
+    assert.equal(get("lod-radius").value, "0.5");
     assert.equal(lods[0].visible, false);
     await get("lod-apply").emit("click");
     assert.deepEqual(calls.shift(), { lodChanges: [[lods[0], true]] });
@@ -779,6 +853,7 @@ test("scene selection and applied material edits reach export; failures appear i
       get("material-model").children.map((option) => option.textContent),
       ["1: same.o3d", "2: same.o3d"],
     );
+    pickHit = null;
     const pointer = { pointerId: 1, button: 0, clientX: 40, clientY: 50 };
     await get("viewport").emit("pointerdown", pointer);
     await get("viewport").emit("pointerup", pointer);
@@ -786,11 +861,11 @@ test("scene selection and applied material edits reach export; failures appear i
     await get("viewport").emit("pointerdown", pointer);
     await get("viewport").emit("pointerup", pointer);
     assert.equal(get("material-model").value, "0");
-    assert.deepEqual(picks, [null, 1]);
+    assert.deepEqual(picks, [null, null, 1]);
     await get("viewport").emit("pointerdown", pointer);
     await get("viewport").emit("pointermove", { ...pointer, clientX: 41 });
     await get("viewport").emit("pointerup", { ...pointer, clientX: 41 });
-    assert.equal(picks.length, 2);
+    assert.equal(picks.length, 3);
     get("material-model").value = "1";
     await get("material-model").emit("change");
     get("model-name").value = "Renamed";
@@ -816,7 +891,7 @@ test("scene selection and applied material edits reach export; failures appear i
       console.error = translationError;
     }
     assert.match(
-      get("scene-list").children[0].children[0].children[1].children[1]
+      get("scene-list").children[1].children[0].children[1].children[1]
         .children[0].children[1].children[0].children[0].children[1]
         .textContent,
       /Renamed/,
@@ -866,7 +941,7 @@ test("scene selection and applied material edits reach export; failures appear i
     );
     assert.equal(get("export-scene-obj").disabled, false);
     await get("export-scene-obj").emit("click");
-    assert.equal(calls.at(-1).model.sceneModels, models);
+    assert.deepEqual(calls.at(-1).model.sceneModels, models);
     assert.match(get("status").textContent, /Download started/);
     await get("export-group-obj").emit("click");
     assert.deepEqual(calls.at(-1).model.sceneModels, [models[1]]);
@@ -926,7 +1001,7 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.equal(get("create-light").disabled, false);
     await get(
       "scene-list",
-    ).children[0].children[0].children[1].children[0].children[1].emit("click");
+    ).children[1].children[0].children[1].children[0].children[1].emit("click");
     assert.match(
       get("cabin-info").textContent,
       /OMSI position \(X Y Z\): 1 2 3/,
@@ -939,9 +1014,43 @@ test("scene selection and applied material edits reach export; failures appear i
       position: [line, 0, 0],
       height: 1,
       rotation: 0,
+      ...(line === 1 ? { illuminationInterior: [0, -1, -1, -1] } : {}),
     });
     const firstRecord = makeCabinRecord("Seat 0", 1);
     const secondRecord = makeCabinRecord("Seat 1", 2);
+    const moneyRecord = {
+      kind: "ticket_sale_money_point_2",
+      source: "cabin.cfg",
+      line: 4,
+      name: "Ticket Money Point",
+      position: [3, 0, 0],
+      variation: [0.5, 0.75],
+      parent: "ticket_parent",
+      markerModelIndex: 0,
+    };
+    const nextReference = {
+      kind: "linktonextveh",
+      source: "cabin.cfg",
+      line: 3,
+      name: "Link To Next Veh",
+      pathPoint: 0,
+      position: [0, 0, 0],
+      pathState: {
+        paths: { points: [[0, 0, 0], [1, 0, 0]] },
+        modelIndex: 1,
+      },
+    };
+    const entryRecord = {
+      kind: "entry",
+      source: "cabin.cfg",
+      line: 5,
+      name: "Entry 0",
+      pathPoint: 0,
+      noTicketSale: true,
+      withButton: false,
+      position: [0, 0, 0],
+      pathState: nextReference.pathState,
+    };
     const firstPoint = {
       kind: "path point",
       source: "people.cfg",
@@ -986,7 +1095,7 @@ test("scene selection and applied material edits reach export; failures appear i
       vertices: new Float32Array(8),
       triangles: new Uint32Array(4),
       materials: [material()],
-      cabinMarkerItems: [firstRecord, secondRecord],
+      cabinMarkerItems: [firstRecord, secondRecord, moneyRecord],
     };
     const pathModel = {
       name: "Cabin Paths",
@@ -1001,7 +1110,26 @@ test("scene selection and applied material edits reach export; failures appear i
     secondRecord.markerModelIndex = 0;
     sceneResult = {
       models: [markerModel, pathModel],
-      lights: [],
+      lights: [
+        {
+          variable: "cabin-light",
+          source: "vehicle.bus",
+          line: 1,
+          position: [2, 0, 0],
+          color: [1, 1, 1],
+          range: 5,
+          on: true,
+        },
+        {
+          variable: "cabin-light-2",
+          source: "vehicle.bus",
+          line: 2,
+          position: [3, 0, 0],
+          color: [1, 1, 1],
+          range: 5,
+          on: true,
+        },
+      ],
       lods: [],
       warnings: [],
       hierarchy: [
@@ -1056,6 +1184,24 @@ test("scene selection and applied material edits reach export; failures appear i
                   children: [],
                 },
                 {
+                  type: "cabin-item",
+                  name: "Link To Next Veh",
+                  info: nextReference,
+                  children: [],
+                },
+                {
+                  type: "cabin-item",
+                  name: "Ticket Money Point",
+                  info: moneyRecord,
+                  children: [],
+                },
+                {
+                  type: "cabin-item",
+                  name: "Entry 0",
+                  info: entryRecord,
+                  children: [],
+                },
+                {
                   type: "model",
                   name: "Cabin markers",
                   modelIndex: 0,
@@ -1073,7 +1219,94 @@ test("scene selection and applied material edits reach export; failures appear i
         },
       ],
     };
+    get("show-gizmos").checked = true;
     await get("open").emit("click");
+    const cabinMarkerLayer = get("cabin-marker-layer");
+    assert.equal(cabinMarkerLayer.hidden, false);
+    assert.equal(cabinMarkerLayer.children.length, 5);
+    assert.equal(cabinMarkerLayer.children[0].style.left, "30px");
+    assert.equal(cabinMarkerLayer.children[0].style.top, "40px");
+    assert.equal(
+      cabinMarkerLayer.children[0].children[0].src,
+      new URL(
+        "../O3DView/O3DView/Resources/gizmo_seat.png",
+        new URL("../src/app.js", import.meta.url),
+      ).href,
+    );
+    assert.equal(
+      cabinMarkerLayer.children[2].children[0].src,
+      new URL(
+        "../O3DView/O3DView/Resources/gizmo_link_next.png",
+        new URL("../src/app.js", import.meta.url),
+      ).href,
+    );
+    assert.equal(
+      cabinMarkerLayer.children[3].children[0].src,
+      new URL(
+        "../O3DView/O3DView/Resources/gizmo_ticket_money.png",
+        new URL("../src/app.js", import.meta.url),
+      ).href,
+    );
+    await cabinMarkerLayer.children[2].emit("click");
+    assert.equal(get("cabin-reference-form").hidden, false);
+    get("cabin-reference-point").value = "1";
+    await get("cabin-reference-form").emit("submit");
+    assert.equal(nextReference.pathPoint, 1);
+    assert.deepEqual(nextReference.position, [1, 0, 0]);
+    await cabinMarkerLayer.children[3].emit("click");
+    assert.equal(get("cabin-metadata-form").hidden, false);
+    assert.equal(get("cabin-variation").value, "0.5 0.75");
+    assert.equal(get("cabin-parent").value, "ticket_parent");
+    get("cabin-variation").value = "0.25 0.5";
+    get("cabin-parent").value = "new_parent";
+    await get("cabin-metadata-form").emit("submit");
+    assert.deepEqual(moneyRecord.variation, [0.25, 0.5]);
+    assert.equal(moneyRecord.parent, "new_parent");
+    await cabinMarkerLayer.children[4].emit("click");
+    assert.equal(get("cabin-entry-options-form").hidden, false);
+    assert.equal(get("cabin-entry-no-ticket-sale").checked, true);
+    assert.equal(get("cabin-entry-with-button").checked, false);
+    get("cabin-entry-no-ticket-sale").checked = false;
+    get("cabin-entry-with-button").checked = true;
+    await get("cabin-entry-options-form").emit("submit");
+    assert.equal(entryRecord.noTicketSale, false);
+    assert.equal(entryRecord.withButton, true);
+    await cabinMarkerLayer.children[0].emit("click");
+    assert.equal(get("cabin-seat-lights-form").hidden, false);
+    assert.equal(get("cabin-seat-light-references").value, "0 -1 -1 -1");
+    assert.equal(
+      get("light-reference-layer").children.filter(
+        (child) => child.className === "light-reference-line",
+      ).length,
+      1,
+    );
+    get("cabin-seat-light-references").value = "1 -1 -1 -1";
+    await get("cabin-seat-lights-form").emit("submit");
+    assert.deepEqual(firstRecord.illuminationInterior, [1, -1, -1, -1]);
+    assert.equal(
+      get("light-reference-layer").children.find(
+        (child) => child.className === "light-reference-line",
+      ).dataset.lightIndex,
+      "1",
+    );
+    get("cabin-seat-light-references").value = "";
+    await get("cabin-seat-lights-form").emit("submit");
+    assert.equal(Object.hasOwn(firstRecord, "illuminationInterior"), false);
+    assert.equal(
+      get("light-reference-layer").children.some(
+        (child) => child.className === "light-reference-line",
+      ),
+      false,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(markerModel.cabinSeatPreview.item, firstRecord);
+    assert.equal(cabinMarkerLayer.children[0].hidden, true);
+    get("show-gizmos").checked = false;
+    await get("show-gizmos").emit("change");
+    assert.equal(cabinMarkerLayer.hidden, true);
+    get("show-gizmos").checked = true;
+    await get("show-gizmos").emit("change");
+    assert.equal(cabinMarkerLayer.hidden, false);
     pickHit = { index: 0, triangleIndex: CABIN_MARKER_TRIANGLE_COUNT };
     const markerPointer = {
       pointerId: 2,
@@ -1085,15 +1318,31 @@ test("scene selection and applied material edits reach export; failures appear i
     await get("viewport").emit("pointerup", markerPointer);
     assert.match(get("cabin-info").textContent, /^Seat 1\n/);
     assert.equal(get("cabin-seat-form").hidden, false);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(markerModel.cabinSeatPreview.item, secondRecord);
+    assert.ok(markerModel.cabinSeatPreviewTriangleStart !== null);
+    pickHit = {
+      index: 0,
+      triangleIndex: markerModel.cabinSeatPreviewTriangleStart,
+    };
+    const previewPointer = {
+      ...markerPointer,
+      clientX: markerPointer.clientX + 1,
+    };
+    await get("viewport").emit("pointerdown", previewPointer);
+    await get("viewport").emit("pointerup", previewPointer);
+    assert.match(get("cabin-info").textContent, /^Seat 1\n/);
+    assert.equal(markerModel.cabinSeatPreview.item, secondRecord);
     pickHit = {
       index: 1,
       triangleIndex: 3 + CABIN_MARKER_TRIANGLE_COUNT,
     };
-    const pathPointer = { ...markerPointer, clientX: markerPointer.clientX + 1 };
+    const pathPointer = { ...markerPointer, clientX: markerPointer.clientX + 2 };
     await get("viewport").emit("pointerdown", pathPointer);
     await get("viewport").emit("pointerup", pathPointer);
     assert.match(get("cabin-info").textContent, /^Path point 8\n/);
     assert.equal(get("cabin-point-form").hidden, false);
+    assert.equal(markerModel.cabinSeatPreview, null);
     pickHit = {
       index: 1,
       triangleIndex: CABIN_PATH_LINK_TRIANGLE_COUNT - 1,
@@ -1229,6 +1478,9 @@ test("scene selection and applied material edits reach export; failures appear i
   } finally {
     delete globalThis.document;
     delete globalThis.window;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+    delete globalThis.localStorage;
     delete globalThis.__appTestDeps;
   }
 });

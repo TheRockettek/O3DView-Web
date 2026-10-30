@@ -275,7 +275,6 @@ test("back-face culling applies to triangles but not wireframe", async () => {
   try {
     const renderer = await WebGLRenderer.create(f.canvas);
     renderer.setModels([model()]);
-    renderer.setBackfaceCulling(true);
     f.flush();
     assert.equal(f.calls.filter((call) => call[0] === "cull").at(-1)[1], true);
     renderer.setWireframe(true);
@@ -316,6 +315,12 @@ test("uploads interior point lights to the shader", async () => {
         color: [1, 1, 1],
         on: true,
       },
+      ...Array.from({ length: 14 }, (_light, index) => ({
+        position: [index + 2, 0, 0],
+        range: 4,
+        color: [1, 1, 1],
+        on: true,
+      })),
     ]);
     f.flush();
     const positions = f.calls
@@ -335,9 +340,11 @@ test("uploads interior point lights to the shader", async () => {
       .at(-1)[2];
     assert.deepEqual(positions.slice(0, 4), [1, 2, 3, 4]);
     assert.deepEqual(positions.slice(4, 8), [0, -1, 0, 4]);
+    assert.equal(positions.length, 64);
+    assert.deepEqual(positions.slice(60, 64), [15, 0, 0, 4]);
     assert.deepEqual(colors.slice(0, 8), [0.5, 1, 2, 1, 1, 1, 1, 2]);
+    assert.equal(colors.length, 64);
     assert.deepEqual(ambients.slice(0, 4), [0.5, 1, 2, 0]);
-    assert.ok(colors.slice(8).every((value) => value === 0));
     renderer.setSun({
       position: [0, 0, 0],
       range: 1000,
@@ -389,6 +396,9 @@ test("uploads interior point lights to the shader", async () => {
       .filter((call) => call[0] === "shader")
       .map((call) => call[1])
       .find((source) => source.includes("pointPositions"));
+    assert.match(shader, /uniform vec4 pointPositions\[16\]/);
+    assert.match(shader, /i < 17/);
+    assert.match(shader, /i == 16/);
     assert.match(shader, /position\.w \/ \(distanceSquared \+ 1\.0\)/);
     renderer.destroy();
   } finally {

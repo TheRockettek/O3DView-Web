@@ -53,30 +53,27 @@ export function decodeTGA(buffer) {
     height = view.getUint16(14, true);
   const depth = view.getUint8(16),
     descriptor = view.getUint8(17);
-  if (![0, 1].includes(colorMapType)) throw new Error("Invalid TGA color map type");
+  if (![0, 1].includes(colorMapType))
+    throw new Error("Invalid TGA color map type");
   if (![1, 2, 3, 9, 10, 11].includes(imageType))
     throw new Error(`Unsupported TGA image type ${imageType}`);
   const indexed = imageType === 1 || imageType === 9;
   if (indexed !== (colorMapType === 1))
-    throw new Error(indexed ? "TGA indexed image has no color map" : "Unexpected TGA color map");
+    throw new Error(
+      indexed
+        ? "TGA indexed image has no color map"
+        : "Unexpected TGA color map",
+    );
   const gray = imageType === 3 || imageType === 11;
   const rle = imageType === 9 || imageType === 10 || imageType === 11;
   if (
-    !(indexed
-      ? [8, 16]
-      : gray
-        ? [8, 16]
-        : [15, 16, 24, 32]
-    ).includes(depth)
+    !(indexed ? [8, 16] : gray ? [8, 16] : [15, 16, 24, 32]).includes(depth)
   ) {
     throw new Error(
       `Unsupported TGA ${indexed ? "indexed" : gray ? "grayscale" : "truecolor"} depth ${depth}`,
     );
   }
-  if (
-    indexed &&
-    (!colorMapLength || ![15, 16, 24, 32].includes(colorMapDepth))
-  )
+  if (indexed && (!colorMapLength || ![15, 16, 24, 32].includes(colorMapDepth)))
     throw new Error("Unsupported or invalid TGA color map");
   if (!indexed && (colorMapStart || colorMapLength || colorMapDepth))
     throw new Error("Unexpected TGA color map data");
@@ -113,14 +110,17 @@ export function decodeTGA(buffer) {
   if (start > end) throw new Error("Truncated TGA color map");
 
   const readColor = (source, colorDepth) => {
-    let b, g, r, alpha = 255;
+    let b,
+      g,
+      r,
+      alpha = 255;
     if (colorDepth === 15 || colorDepth === 16) {
       const packed = view.getUint16(source, true);
-      b = (packed & 31) * 255 / 31;
-      g = ((packed >> 5) & 31) * 255 / 31;
-      r = ((packed >> 10) & 31) * 255 / 31;
+      b = ((packed & 31) * 255) / 31;
+      g = (((packed >> 5) & 31) * 255) / 31;
+      r = (((packed >> 10) & 31) * 255) / 31;
       if (colorDepth === 16 && (descriptor & 15) > 0)
-        alpha = (packed & 0x8000) ? 255 : 0;
+        alpha = packed & 0x8000 ? 255 : 0;
     } else {
       b = view.getUint8(source);
       g = view.getUint8(source + 1);
@@ -136,9 +136,7 @@ export function decodeTGA(buffer) {
     ];
   };
   const readIndex = (source) =>
-    bytesPerPixel === 1
-      ? view.getUint8(source)
-      : view.getUint16(source, true);
+    bytesPerPixel === 1 ? view.getUint8(source) : view.getUint16(source, true);
   const readIndexedColor = (source) => {
     const index = readIndex(source);
     const paletteIndex = index - colorMapStart;

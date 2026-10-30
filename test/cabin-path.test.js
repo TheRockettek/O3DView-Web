@@ -1,14 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  cabinMarkerIcon,
   cabinPathPointWorldPosition,
+  cabinMarkerExportModel,
   CABIN_MARKER_COLORS,
   parseCabinPaths,
   parsePassengerCabin,
   generateCabinMarkerMesh,
   generateCabinPathMesh,
   updateCabinMarkerPosition,
+  updateCabinSeatProperties,
+  updateCabinSeatPreview,
   updateCabinPathPoint,
+  updateCabinPathReference,
   updateCabinPathLink,
 } from "../src/cabin-path.js";
 import { loadScene } from "../src/scene.js";
@@ -21,6 +26,26 @@ const file = (path, text) => ({
   async arrayBuffer() {
     return new TextEncoder().encode(text).buffer;
   },
+});
+
+test("maps cabin record kinds to desktop gizmo icons", () => {
+  assert.equal(cabinMarkerIcon("passpos"), "gizmo_seat.png");
+  assert.equal(cabinMarkerIcon("drivpos"), "gizmo_seat.png");
+  assert.equal(cabinMarkerIcon("entry"), "gizmo_entry.png");
+  assert.equal(cabinMarkerIcon("exit"), "gizmo_exit.png");
+  assert.equal(cabinMarkerIcon("linktonextveh"), "gizmo_link_next.png");
+  assert.equal(cabinMarkerIcon("linktoprevveh"), "gizmo_link_prev.png");
+  assert.equal(cabinMarkerIcon("stamper"), "gizmo_stamper.png");
+  assert.equal(cabinMarkerIcon("ticket_sale"), "gizmo_ticket_sale.png");
+  assert.equal(
+    cabinMarkerIcon("ticket_sale_money_point_2"),
+    "gizmo_ticket_money.png",
+  );
+  assert.equal(
+    cabinMarkerIcon("ticket_sale_change_point"),
+    "gizmo_ticket_change.png",
+  );
+  assert.equal(cabinMarkerIcon("unknown"), null);
 });
 
 test("cabin path point world positions match rendered axes and map placement", () => {
@@ -67,16 +92,252 @@ test("cabin marker geometry assigns distinct materials to record kinds", () => {
     { kind: "ticket_sale", position: [2, 0, 0] },
     { kind: "ticket_sale_money_point_2", position: [3, 0, 0] },
     { kind: "ticket_sale_change_point", position: [4, 0, 0] },
+    { kind: "entry", position: [5, 0, 0] },
+    { kind: "exit", position: [6, 0, 0] },
   ]);
   const materialIndices = Array.from(
     { length: geometry.triangles.length / 4 },
     (_, index) => geometry.triangles[index * 4 + 3],
   );
-  assert.equal(CABIN_MARKER_COLORS.length, 5);
+  assert.equal(CABIN_MARKER_COLORS.length, 7);
   assert.deepEqual(
     materialIndices,
-    [0, 1, 2, 3, 4].flatMap((material) => Array(8).fill(material)),
+    [0, 1, 2, 3, 4, 5, 6].flatMap((material) => Array(8).fill(material)),
   );
+});
+
+test("seat marker arrows follow their rotation and seat edits rebuild atomically", () => {
+  const item = {
+    kind: "passpos",
+    position: [0, 0, 0],
+    height: 0,
+    rotation: 0,
+  };
+  const initial = generateCabinMarkerMesh([item]);
+  assert.deepEqual(
+    [...initial.vertices.slice(16, 19)],
+    [...new Float32Array([0, 0, 0.28])],
+  );
+  const markerModel = {
+    ...initial,
+    cabinMarkerItems: [item],
+    worldTranslation: [0, 0, 0],
+  };
+  const models = [markerModel];
+  let fail = false,
+    setCalls = 0;
+  const renderer = {
+    _target: [0, 0, 0],
+    _distance: 2,
+    _yaw: 0,
+    _pitch: 0,
+    _viewRadius: 1,
+    _requestFrame() {},
+    setModels() {
+      setCalls++;
+      if (fail && setCalls === 1) throw new Error("renderer update failed");
+    },
+    setModelVisible() {},
+    setSelectedModel() {},
+  };
+  updateCabinSeatProperties(
+    markerModel,
+    item,
+    1,
+    90,
+    renderer,
+    models,
+    [true],
+    [true],
+    0,
+    null,
+  );
+  assert.equal(item.height, 1);
+  assert.equal(item.rotation, 90);
+  assert.ok(Math.abs(markerModel.vertices[16] - 0.28) < 0.00001);
+  assert.ok(Math.abs(markerModel.vertices[18]) < 0.00001);
+
+  const updated = markerModel.vertices;
+  fail = true;
+  setCalls = 0;
+  assert.throws(
+    () =>
+      updateCabinSeatProperties(
+        markerModel,
+        item,
+        0,
+        180,
+        renderer,
+        models,
+        [true],
+        [true],
+        0,
+        null,
+      ),
+    /renderer update failed/,
+  );
+  assert.equal(item.height, 1);
+  assert.equal(item.rotation, 90);
+  assert.equal(markerModel.vertices, updated);
+});
+
+test("selected seat previews use the desktop standing or sitting mesh", () => {
+  const item = {
+    kind: "passpos",
+    position: [10, 20, 30],
+    height: 0,
+    rotation: 90,
+  };
+  const mesh = (position) => ({
+    vertices: new Float32Array([
+      ...position, 0, 1, 0, 0, 0,
+      0, 0, 0, 0, 1, 0, 0, 0,
+      0, 0, 0, 0, 1, 0, 0, 0,
+    ]),
+    triangles: new Uint32Array([0, 1, 2, 0]),
+    materials: [
+      {
+        diffuse: [1, 0.2, 0.1, 1],
+        spec: [1, 1, 1],
+        emission: [0, 0, 0],
+        specPower: 1,
+        textureName: "",
+      },
+    ],
+  });
+  const previewModels = {
+    standing: mesh([1, 2, 3]),
+    sitting: mesh([4, 5, 6]),
+  };
+  const markerModel = {
+    ...generateCabinMarkerMesh([item]),
+    cabinMarkerItems: [item],
+    materials: Array.from({ length: 7 }, () => ({
+      diffuse: [1, 1, 1, 1],
+      spec: [0, 0, 0],
+      emission: [0, 0, 0],
+      specPower: 0,
+      textureName: "",
+    })),
+    worldTranslation: [0, 0, 0],
+  };
+  const models = [markerModel];
+  const renderer = {
+    _target: [0, 0, 0],
+    _distance: 2,
+    _yaw: 0,
+    _pitch: 0,
+    _viewRadius: 1,
+    _requestFrame() {},
+    setModels() {},
+    setModelVisible() {},
+    setSelectedModel() {},
+  };
+  const updatePreview = (selectedItem, assets) =>
+    updateCabinSeatPreview(
+      markerModel,
+      selectedItem,
+      assets,
+      renderer,
+      models,
+      [true],
+      [true],
+      0,
+      null,
+    );
+  updatePreview(item, previewModels);
+  assert.equal(markerModel.cabinSeatPreviewTriangleStart, 8);
+  assert.deepEqual(
+    [...markerModel.vertices.slice(48, 51)],
+    [...new Float32Array([13, 32, 19])],
+  );
+  assert.deepEqual([...markerModel.triangles.slice(32, 36)], [6, 7, 8, 7]);
+
+  updateCabinSeatProperties(
+    markerModel,
+    item,
+    1,
+    90,
+    renderer,
+    models,
+    [true],
+    [true],
+    0,
+    null,
+  );
+  assert.deepEqual(
+    [...markerModel.vertices.slice(48, 51)],
+    [...new Float32Array([16, 35, 16])],
+  );
+  assert.deepEqual([...markerModel.triangles.slice(32, 36)], [6, 7, 8, 8]);
+
+  updatePreview(null, null);
+  assert.equal(markerModel.cabinSeatPreviewTriangleStart, null);
+  assert.equal(markerModel.triangles.length, 32);
+
+  const failedModel = {
+    ...generateCabinMarkerMesh([item]),
+    cabinMarkerItems: [item],
+    materials: markerModel.materials.slice(0, 7),
+    worldTranslation: [0, 0, 0],
+  };
+  const originalVertices = failedModel.vertices;
+  const originalTriangles = failedModel.triangles;
+  let failNextRebuild = true;
+  const failingRenderer = {
+    ...renderer,
+    setModels() {
+      if (failNextRebuild) {
+        failNextRebuild = false;
+        throw new Error("renderer update failed");
+      }
+    },
+  };
+  assert.throws(
+    () =>
+      updateCabinSeatPreview(
+        failedModel,
+        item,
+        previewModels,
+        failingRenderer,
+        [failedModel],
+        [true],
+        [true],
+        0,
+        null,
+      ),
+    /renderer update failed/,
+  );
+  assert.equal(failedModel.vertices, originalVertices);
+  assert.equal(failedModel.triangles, originalTriangles);
+  assert.equal(failedModel.materials.length, 7);
+  assert.equal(failedModel.cabinSeatPreviewMaterialStart, undefined);
+  assert.equal(failedModel.cabinSeatPreviewMaterialIndices, undefined);
+  assert.equal(failedModel.cabinSeatPreview, undefined);
+});
+
+test("cabin marker exports omit the selected seat preview", () => {
+  const model = {
+    vertices: new Float32Array(24),
+    triangles: new Uint32Array(8),
+    materials: [{ name: "marker" }, { name: "preview" }],
+    cabinSeatPreviewMaterialStart: 1,
+    cabinSeatPreviewVertexStart: 1,
+    cabinSeatPreviewTriangleStart: 1,
+  };
+  const exported = cabinMarkerExportModel(model);
+  assert.equal(exported.vertices.length, 8);
+  assert.equal(exported.triangles.length, 4);
+  assert.deepEqual(exported.materials, [{ name: "marker" }]);
+  assert.equal(model.vertices.length, 24);
+  assert.equal(model.triangles.length, 8);
+
+  model.cabinSeatPreviewVertexStart = null;
+  model.cabinSeatPreviewTriangleStart = null;
+  const cleared = cabinMarkerExportModel(model);
+  assert.equal(cleared.vertices.length, 24);
+  assert.equal(cleared.triangles.length, 8);
+  assert.deepEqual(cleared.materials, [{ name: "marker" }]);
 });
 
 test("updates cabin marker positions atomically with renderer rollback", () => {
@@ -198,6 +459,34 @@ test("parses cabin path links and generates desktop-width geometry in OMSI coord
   );
 });
 
+test("generates distinct entry and exit markers at their referenced path points", () => {
+  const paths = parseCabinPaths("[pathpnt]\n1\n2\n3\n");
+  const items = [
+    { kind: "entry", pathPoint: 0 },
+    { kind: "exit", pathPoint: 0 },
+  ];
+  const geometry = generateCabinPathMesh(paths, items);
+  assert.equal(geometry.pointMarkerTriangleStart, 0);
+  assert.equal(geometry.specialMarkerTriangleStart, 8);
+  assert.equal(geometry.triangles.length, 96);
+  assert.deepEqual(
+    [...geometry.triangles.slice(32, 36)],
+    [6, 8, 7, 5],
+  );
+  assert.deepEqual(
+    [...geometry.triangles.slice(64, 68)],
+    [12, 14, 13, 6],
+  );
+  assert.deepEqual(
+    [...geometry.vertices.slice(48, 51)],
+    [...new Float32Array([0.88, 3.075, 2])],
+  );
+  assert.deepEqual(
+    [...geometry.vertices.slice(96, 99)],
+    [...new Float32Array([1.12, 3.075, 2])],
+  );
+});
+
 test("invalid points retain their indices and unusable links are reported", () => {
   const paths = parseCabinPaths(
     [
@@ -289,6 +578,8 @@ test("parses passenger cabin seats, entrances and ticket points without consumin
     [
       "[entry]",
       "1",
+      "{noticketsale}",
+      "{withbutton}",
       "[exit]",
       "0",
       "[passpos]",
@@ -297,6 +588,11 @@ test("parses passenger cabin seats, entrances and ticket points without consumin
       "3",
       "0.5",
       "90",
+      "[illumination_interior]",
+      "0",
+      "1",
+      "-1",
+      "3",
       "[drivpos]",
       "4",
       "5",
@@ -335,8 +631,11 @@ test("parses passenger cabin seats, entrances and ticket points without consumin
   );
   assert.deepEqual(cabin.items[2].position, [1, 2, 3]);
   assert.equal(cabin.items[2].rotation, 90);
+  assert.deepEqual(cabin.items[2].illuminationInterior, [0, 1, -1, 3]);
   assert.deepEqual(cabin.items[5].variation, [0.5, 0.2]);
   assert.equal(cabin.items[5].parent, "parent");
+  assert.equal(cabin.items[0].noTicketSale, true);
+  assert.equal(cabin.items[0].withButton, true);
   assert.match(cabin.warnings.join("\n"), /invalid numeric/);
 });
 
@@ -406,7 +705,7 @@ test("passenger cabin records load even when the bus has no path file", async ()
   );
   assert.deepEqual(
     [...result.models[markers.modelIndex].vertices.slice(0, 8)],
-    [...new Float32Array([1, 3.075, 2, 0, 1, 0, 0, 0])],
+    [...new Float32Array([1, 3.06, 2, 0, 1, 0, 0, 0])],
   );
   assert.match(result.warnings.join("\n"), /missing cabin path point 4/);
   const visibility = [];
@@ -426,7 +725,10 @@ test("indexed cabin records keep their own markers apart from path references", 
     [
       file("vehicle.bus", "[paths]\npeople.cfg\n[passengercabin]\ncabin.cfg\n"),
       file("people.cfg", "[pathpnt]\n0\n0\n0\n"),
-      file("cabin.cfg", "[stamper]\n0\n1\n2\n3\n[entry]\n0\n"),
+      file(
+        "cabin.cfg",
+        "[stamper]\n0\n1\n2\n3\n[entry]\n0\n[linktonextveh]\n0\n[linktoprevveh]\n0\n",
+      ),
     ],
     ["vehicle.bus"],
   );
@@ -439,6 +741,13 @@ test("indexed cabin records keep their own markers apart from path references", 
   const entry = cabin.children.find(
     (node) => node.type === "cabin-item" && node.name === "Entry 0",
   );
+  const nextLink = cabin.children.find(
+    (node) => node.type === "cabin-item" && node.name === "Link To Next Veh",
+  );
+  const previousLink = cabin.children.find(
+    (node) =>
+      node.type === "cabin-item" && node.name === "Link To Prev Veh",
+  );
   const markerNode = cabin.children.find((node) => node.type === "model");
   assert.equal(result.models.length, 2);
   assert.equal(stamper.info.pathPoint, 0);
@@ -447,7 +756,22 @@ test("indexed cabin records keep their own markers apart from path references", 
   assert.equal(entry.info.pathPoint, 0);
   assert.deepEqual(entry.info.position, [0, 0, 0]);
   assert.equal(entry.info.markerModelIndex, undefined);
-  assert.equal(result.models[markerNode.modelIndex].materials.length, 5);
+  const pathModel = result.models.find((model) => model.cabinPathSource);
+  assert.ok(pathModel);
+  assert.equal(entry.info.pathState.modelIndex, result.models.indexOf(pathModel));
+  assert.equal(nextLink.info.pathState, entry.info.pathState);
+  assert.equal(previousLink.info.pathState, entry.info.pathState);
+  assert.deepEqual(nextLink.info.position, entry.info.position);
+  assert.deepEqual(previousLink.info.position, entry.info.position);
+  assert.equal(pathModel.cabinPathSpecialMarkerItems[0], entry.info);
+  assert.equal(pathModel.materials.length, 7);
+  assert.equal(
+    pathModel.triangles[
+      pathModel.cabinPathSpecialMarkerTriangleStart * 4 + 3
+    ],
+    5,
+  );
+  assert.equal(result.models[markerNode.modelIndex].materials.length, 7);
   assert.equal(result.models[markerNode.modelIndex].triangles[3], 1);
   assert.deepEqual(
     [...result.models[markerNode.modelIndex].vertices.slice(0, 3)],
@@ -497,6 +821,10 @@ test("editing a cabin point rebuilds links, retains translation, and updates ref
   );
   const before = model.vertices;
   assert.deepEqual(
+    [...before.slice(144, 147)],
+    [...new Float32Array([-1.12, 0.075, 0])],
+  );
+  assert.deepEqual(
     updateCabinPathPoint(
       point.pathState,
       1,
@@ -513,6 +841,11 @@ test("editing a cabin point rebuilds links, retains translation, and updates ref
   assert.deepEqual(point.position, [4, 0, 1]);
   assert.deepEqual(entry.position, [4, 0, 1]);
   assert.notEqual(model.vertices, before);
+  assert.ok(Math.abs(model.vertices[144] - 0.88) < 0.00001);
+  assert.deepEqual(
+    [...model.vertices.slice(145, 147)],
+    [...new Float32Array([1.075, 0])],
+  );
   assert.deepEqual(model.worldTranslation, [3, 0, 0]);
   assert.equal(model.vertices[16], 1);
   assert.equal(model.vertices[17], 1);
@@ -534,6 +867,108 @@ test("editing a cabin point rebuilds links, retains translation, and updates ref
   );
   assert.equal(model.vertices, updated);
   assert.deepEqual(point.position, [4, 0, 1]);
+});
+
+test("editing a cabin path reference updates referenced markers and direct records independently", async () => {
+  const result = await loadScene(
+    [
+      file("vehicle.bus", "[paths]\npeople.cfg\n[passengercabin]\ncabin.cfg\n"),
+      file("people.cfg", "[pathpnt]\n0\n0\n0\n[pathpnt]\n2\n0\n0\n"),
+      file(
+        "cabin.cfg",
+        "[entry]\n0\n[exit]\n1\n[linktonextveh]\n0\n[linktoprevveh]\n1\n[stamper]\n0\n1\n2\n3\n",
+      ),
+    ],
+    ["vehicle.bus"],
+  );
+  const cabin = result.hierarchy[0].children.find(
+    (node) => node.type === "cabin",
+  );
+  const info = (name) =>
+    cabin.children.find(
+      (node) => node.type === "cabin-item" && node.name === name,
+    ).info;
+  const entry = info("Entry 0");
+  const next = info("Link To Next Veh");
+  const stamper = info("Stamper");
+  const state = entry.pathState;
+  const pathModel = result.models[state.modelIndex];
+  const renderer = {
+    _target: [0, 0, 0],
+    _distance: 1,
+    _yaw: 0,
+    _pitch: 0,
+    _viewRadius: 1,
+    _requestFrame() {},
+    setModels() {},
+    setModelVisible() {},
+    setSelectedModel() {},
+  };
+  const previousGeometry = pathModel.vertices;
+  assert.deepEqual(
+    updateCabinPathReference(
+      state,
+      entry,
+      1,
+      renderer,
+      result.models,
+      result.models.map(() => true),
+      result.models.map(() => true),
+      0,
+      null,
+    ),
+    [],
+  );
+  assert.equal(entry.pathPoint, 1);
+  assert.deepEqual(entry.position, [2, 0, 0]);
+  assert.notEqual(pathModel.vertices, previousGeometry);
+  assert.deepEqual(
+    updateCabinPathReference(
+      state,
+      next,
+      1,
+      renderer,
+      result.models,
+      result.models.map(() => true),
+      result.models.map(() => true),
+      0,
+      null,
+    ),
+    [],
+  );
+  assert.deepEqual(next.position, [2, 0, 0]);
+  assert.deepEqual(
+    updateCabinPathReference(
+      state,
+      stamper,
+      1,
+      renderer,
+      result.models,
+      result.models.map(() => true),
+      result.models.map(() => true),
+      0,
+      null,
+    ),
+    [],
+  );
+  assert.deepEqual(stamper.position, [1, 2, 3]);
+  assert.equal(stamper.pathPoint, 1);
+  assert.throws(
+    () =>
+      updateCabinPathReference(
+        state,
+        entry,
+        3,
+        renderer,
+        result.models,
+        [true, true],
+        [true, true],
+        0,
+        null,
+      ),
+    /existing cabin point/,
+  );
+  assert.equal(entry.pathPoint, 1);
 });
 
 test("point markers create editable geometry when path links are degenerate", async () => {
@@ -638,6 +1073,58 @@ test("point edits preserve existing geometry and metadata when renderer rebuild 
   assert.deepEqual(point.position, [2, 0, 0]);
 });
 
+test("failed path-reference rebuild restores the cabin item", async () => {
+  const result = await loadScene(
+    [
+      file("vehicle.bus", "[paths]\npeople.cfg\n[passengercabin]\ncabin.cfg\n"),
+      file("people.cfg", "[pathpnt]\n0\n0\n0\n[pathpnt]\n2\n0\n0\n"),
+      file("cabin.cfg", "[entry]\n0\n"),
+    ],
+    ["vehicle.bus"],
+  );
+  const entry = result.hierarchy[0].children
+    .find((node) => node.type === "cabin")
+    .children[0].info;
+  const state = entry.pathState;
+  const model = result.models[state.modelIndex];
+  const vertices = model.vertices;
+  let fail = true;
+  const renderer = {
+    _target: [0, 0, 0],
+    _distance: 1,
+    _yaw: 0,
+    _pitch: 0,
+    _viewRadius: 1,
+    _requestFrame() {},
+    setSelectedModel() {},
+    setModelVisible() {},
+    setModels() {
+      if (fail) {
+        fail = false;
+        throw new Error("render failure");
+      }
+    },
+  };
+  assert.throws(
+    () =>
+      updateCabinPathReference(
+        state,
+        entry,
+        1,
+        renderer,
+        result.models,
+        [true],
+        [true],
+        0,
+        0,
+      ),
+    /render failure/,
+  );
+  assert.equal(entry.pathPoint, 0);
+  assert.deepEqual(entry.position, [0, 0, 0]);
+  assert.equal(model.vertices, vertices);
+});
+
 test("editing a link changes its mesh and metadata atomically", async () => {
   const result = await loadScene(
     [
@@ -704,4 +1191,58 @@ test("editing a link changes its mesh and metadata atomically", async () => {
   );
   assert.equal(info.link.b, 2);
   assert.equal(model.vertices, updated);
+});
+
+test("editing a link refreshes cabin marker picking ranges when the link is skipped", async () => {
+  const result = await loadScene(
+    [
+      file("vehicle.bus", "[paths]\npeople.cfg\n[passengercabin]\ncabin.cfg\n"),
+      file(
+        "people.cfg",
+        "[pathpnt]\n0\n0\n0\n[pathpnt]\n2\n0\n0\n[pathlink]\n0\n1\n",
+      ),
+      file("cabin.cfg", "[entry]\n1\n"),
+    ],
+    ["vehicle.bus"],
+  );
+  const point = result.hierarchy[0].children.find(
+    (node) => node.type === "cabin-points",
+  ).children[1].info;
+  const model = result.models[point.pathState.modelIndex];
+  const link = point.pathState.paths.links[0];
+  const renderer = {
+    _target: [0, 0, 0],
+    _distance: 2,
+    _yaw: 0,
+    _pitch: 0,
+    _viewRadius: 1,
+    _requestFrame() {},
+    setModels() {},
+    setModelVisible() {},
+    setSelectedModel() {},
+  };
+  assert.deepEqual(
+    updateCabinPathLink(
+      point.pathState,
+      0,
+      {
+        a: 1,
+        b: 1,
+        oneWay: link.oneWay,
+        roomHeight: link.roomHeight,
+        stepSound: link.stepSound,
+      },
+      renderer,
+      result.models,
+      [true],
+      [true],
+      0,
+      null,
+    ),
+    ["line 9: path link has no horizontal length; skipped"],
+  );
+  assert.equal(model.cabinPathLinkItems.length, 0);
+  assert.equal(model.cabinPathPointMarkerTriangleStart, 0);
+  assert.equal(model.cabinPathSpecialMarkerTriangleStart, 16);
+  assert.equal(model.triangles.length, 96);
 });

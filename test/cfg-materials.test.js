@@ -54,6 +54,31 @@ test("associates material commands with each mesh instance and occurrence", () =
   ]);
 });
 
+test("parses interior-light references per mesh and reports invalid indices", () => {
+  const { meshes, warnings } = parseCfgMaterials([
+    "[mesh]",
+    "body.o3d",
+    "[illumination_interior]",
+    "0",
+    "2",
+    "-1",
+    "3",
+    "[mesh]",
+    "window.o3d",
+    "[illumination_interior]",
+    "0",
+    "1.5",
+    "-1",
+    "0",
+    "[mesh]",
+    "door.o3d",
+  ]);
+  assert.deepEqual(meshes[0].illuminationInterior, [0, 2, -1, 3]);
+  assert.equal(meshes[1].illuminationInterior, undefined);
+  assert.equal(meshes[2].illuminationInterior, undefined);
+  assert.match(warnings.join("\n"), /invalid light indices/);
+});
+
 test("viewpoint flags attach to their mesh occurrence and later valid tags replace earlier ones", () => {
   const { meshes, warnings } = parseCfgMaterials([
     "[viewpoint]",
@@ -257,6 +282,7 @@ test("records static map paths and the optional lightmap strength variable", () 
       nightmap: "night/body_lm.dds",
       lightmap: "D92_Panel_LM.bmp",
       lightmapVar: "lights_stand",
+      lightmapStrength: 0,
       alphaMode: 2,
     },
     {
@@ -266,6 +292,111 @@ test("records static map paths and the optional lightmap strength variable", () 
       lightmap: "other.bmp",
       noZWrite: true,
     },
+  ]);
+  assert.deepEqual(warnings, []);
+});
+
+test("parses free-texture replacement variables per material", () => {
+  const { meshes, warnings } = parseCfgMaterials([
+    "[mesh]",
+    "bus.o3d",
+    "[matl]",
+    "body.bmp",
+    "0",
+    "[matl_freetex]",
+    "textures/body.bmp",
+    "paint_texture",
+    "[matl_freetex]",
+    "window.bmp",
+    "window_texture",
+    "[matl]",
+    "glass.bmp",
+    "0",
+    "[matl_freetex]",
+    "glass.bmp",
+  ]);
+  assert.deepEqual(meshes[0].materials[0].freetexes, [
+    { path: "textures/body.bmp", varName: "paint_texture" },
+    { path: "window.bmp", varName: "window_texture" },
+  ]);
+  assert.deepEqual(meshes[0].materials[1].freetexes, undefined);
+  assert.match(warnings.join("\n"), /\[matl_freetex\] requires 2 parameters/);
+});
+
+test("preserves desktop texcoord translation variable names", () => {
+  const { meshes, warnings } = parseCfgMaterials([
+    "[mesh]",
+    "bus.o3d",
+    "[matl]",
+    "body.bmp",
+    "0",
+    "[texcoordtransx]",
+    "scroll_x",
+    "[texcoordtransy]",
+    "scroll_y",
+  ]);
+  assert.deepEqual(warnings, []);
+  assert.equal(meshes[0].materials[0].texcoordTransXVar, "scroll_x");
+  assert.equal(meshes[0].materials[0].texcoordTransYVar, "scroll_y");
+});
+
+test("collects desktop texttexture_enh string variables with empty defaults", () => {
+  const { stringVariables, warnings } = parseCfgMaterials([
+    "[texttexture_enh]",
+    "display_text",
+    "Arial",
+    "256",
+    "64",
+    "0",
+    "1",
+    "1",
+    "1",
+    "[mesh]",
+    "bus.o3d",
+  ]);
+  assert.deepEqual(stringVariables, [{ name: "display_text", value: "" }]);
+  assert.deepEqual(warnings, []);
+});
+
+test("collects desktop light brightness variables without rendering light commands", () => {
+  const { floatVariables, warnings } = parseCfgMaterials([
+    "[light]",
+    "legacy_brightness",
+    "[light_enh]",
+    "0",
+    "0",
+    "0",
+    "255",
+    "255",
+    "255",
+    "1",
+    "enhanced_brightness",
+    "0.6",
+    "[light_enh_2]",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "1",
+    "0",
+    "1",
+    "0",
+    "0",
+    "0",
+    "255",
+    "255",
+    "255",
+    "1",
+    "30",
+    "60",
+    "extended_brightness",
+    "0.75",
+  ]);
+  assert.deepEqual(floatVariables, [
+    { name: "legacy_brightness", value: 0 },
+    { name: "enhanced_brightness", value: Math.fround(0.6) },
+    { name: "extended_brightness", value: 0.75 },
   ]);
   assert.deepEqual(warnings, []);
 });
@@ -302,6 +433,7 @@ test("malformed map paths warn without erasing valid paths or consuming commands
     nightmap: "n.dds",
     lightmap: "l.bmp",
     lightmapVar: "strength",
+    lightmapStrength: 0,
     noZCheck: true,
   });
   assert.deepEqual(warnings, [
@@ -719,5 +851,10 @@ test("disabled blocks are ignored, including malformed and mesh tags", () => {
 test("rejects invalid API inputs and permits empty configs", () => {
   assert.throws(() => parseCfgMaterials(null), TypeError);
   assert.throws(() => parseCfgMaterials(["ok", 1]), TypeError);
-  assert.deepEqual(parseCfgMaterials(""), { meshes: [], warnings: [] });
+  assert.deepEqual(parseCfgMaterials(""), {
+    meshes: [],
+    stringVariables: [],
+    floatVariables: [],
+    warnings: [],
+  });
 });

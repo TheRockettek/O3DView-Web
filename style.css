@@ -42,8 +42,15 @@ button:focus-visible, .button:has(+ input:focus-visible), select:focus-visible, 
 canvas { width: 100%; height: 100%; display: block; touch-action: none; }
 .light-reference-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .light-reference-layer[hidden] { display: none; }
-.light-reference-marker { position: absolute; width: 1.8rem; height: 1.8rem; margin: 0; padding: 0; border: 2px solid #fff2bd; border-radius: 50%; background: #b87925; color: #fff; font-size: .75rem; font-weight: 700; line-height: 1; transform: translate(-50%, -50%); pointer-events: auto; box-shadow: 0 1px 5px #000b; }
+.light-reference-marker { position: absolute; z-index: 1; width: 1.8rem; height: 1.8rem; margin: 0; padding: 0; border: 2px solid #fff2bd; border-radius: 50%; background: #b87925; color: #fff; font-size: .75rem; font-weight: 700; line-height: 1; transform: translate(-50%, -50%); pointer-events: auto; box-shadow: 0 1px 5px #000b; }
 .light-reference-marker[hidden] { display: none; }
+.light-reference-line { position: absolute; z-index: 0; height: 2px; transform-origin: 0 50%; background: #ffd27b; opacity: .9; pointer-events: none; box-shadow: 0 0 3px #000; }
+.light-reference-line[hidden] { display: none; }
+.cabin-marker-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.cabin-marker-layer[hidden] { display: none; }
+.cabin-marker-reference { position: absolute; width: 1.8rem; height: 1.8rem; margin: 0; padding: 0; border: 0; background: transparent; transform: translate(-50%, -50%); pointer-events: auto; cursor: pointer; filter: drop-shadow(0 1px 3px #000b); }
+.cabin-marker-reference img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.cabin-marker-reference[hidden] { display: none; }
 .placeholder { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; color: #a5b8c8; }
 .placeholder[hidden] { display: none; }
 footer { background: #131c29; padding: .65rem 1.4rem; border-top: 1px solid #2b394a; font-size: .82rem; }

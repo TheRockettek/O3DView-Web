@@ -11,8 +11,13 @@ function fixture({
   alpha = true,
   pitch,
   payload = [],
+  dxgiFormat = 71,
+  resourceDimension = 3,
+  miscFlag = 0,
+  arraySize = 1,
 } = {}) {
-  const bytes = new Uint8Array(128 + payload.length);
+  const dataOffset = format === "DX10" ? 148 : 128;
+  const bytes = new Uint8Array(dataOffset + payload.length);
   const v = new DataView(bytes.buffer);
   const put = (offset, value) => v.setUint32(offset, value, true);
   put(0, 0x20534444);
@@ -34,8 +39,14 @@ function fixture({
   } else {
     put(80, 4);
     for (let i = 0; i < 4; i++) v.setUint8(84 + i, format.charCodeAt(i));
+    if (format === "DX10") {
+      put(128, dxgiFormat);
+      put(132, resourceDimension);
+      put(136, miscFlag);
+      put(140, arraySize);
+    }
   }
-  bytes.set(payload, 128);
+  bytes.set(payload, dataOffset);
   return bytes.buffer;
 }
 
@@ -319,6 +330,78 @@ test("DXT4 converts premultiplied BC3 colors using interpolated alpha", () => {
   assert.deepEqual(pixel(alternate, 0, 1), [66, 65, 66, 255]);
 });
 
+test("decodes DX10 BC1, BC2 and BC3 2D textures", () => {
+  for (const [dxgiFormats, payload, expected] of [
+    [[70, 71, 72], block(0xf800, 0), [255, 0, 0, 255]],
+    [
+      [73, 74, 75],
+      [...Array(8).fill(255), ...block(0x07e0, 0)],
+      [0, 255, 0, 255],
+    ],
+    [
+      [76, 77, 78],
+      [255, 0, ...Array(6).fill(0), ...block(0x001f, 0)],
+      [0, 0, 255, 255],
+    ],
+  ]) {
+    for (const dxgiFormat of dxgiFormats) {
+      const decoded = decodeDDS(
+        fixture({ format: "DX10", dxgiFormat, payload }),
+      );
+      assert.deepEqual(pixel(decoded, 0, 0), expected);
+    }
+  }
+});
+
+test("decodes DX10 sRGB and typeless BC formats and rejects unsupported texture types", () => {
+  const srgb = decodeDDS(
+    fixture({
+      format: "DX10",
+      dxgiFormat: 72,
+      payload: block(0x7800, 0),
+    }),
+  );
+  assert.deepEqual(pixel(srgb, 0, 0), [51, 0, 0, 255]);
+  assert.deepEqual(
+    pixel(
+      decodeDDS(
+        fixture({
+          format: "DX10",
+          dxgiFormat: 70,
+          payload: block(0xf800, 0),
+        }),
+      ),
+      0,
+      0,
+    ),
+    [255, 0, 0, 255],
+  );
+  for (const options of [
+    { resourceDimension: 4 },
+    { miscFlag: 4 },
+    { arraySize: 2 },
+  ]) {
+    assert.throws(
+      () =>
+        decodeDDS(
+          fixture({ format: "DX10", payload: block(0, 0), ...options }),
+        ),
+      /Unsupported DDS DX10 texture type/,
+    );
+  }
+  assert.throws(
+    () =>
+      decodeDDS(
+        fixture({ format: "DX10", dxgiFormat: 98, payload: block(0, 0) }),
+      ),
+    /Unsupported DDS DXGI format/,
+  );
+  assert.throws(
+    () => decodeDDS(fixture({ format: "DX10" }).slice(0, 140)),
+    /Truncated DDS DX10 header/,
+  );
+});
+
 test("clips partial blocks and handles multiple blocks in row-major order", () => {
   const decoded = decodeDDS(
     fixture({
@@ -358,7 +441,7 @@ test("rejects malformed headers, dimensions, and unsupported texture types", () 
     new DataView(dds).setUint32(offset, value, true);
     assert.throws(() => decodeDDS(dds), error);
   }
-  for (const format of ["DX10", "BC7 "]) {
+  for (const format of ["BC7 "]) {
     assert.throws(
       () => decodeDDS(fixture({ format })),
       /Unsupported DDS FourCC/,

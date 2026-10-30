@@ -118,17 +118,18 @@ test("picking uses reflected model X, camera orientation, clipping and inside bo
   assert.throws(() => pickModel(renderer, models, x, 70), /lost/);
 });
 
-test("back-face culling follows the renderer's reflected and reversed winding, except in wireframe", () => {
+test("picking remains two-sided like desktop when rendering culls back faces", () => {
   const front = triangle(0),
     back = triangle(2);
   back.triangles = new Uint32Array([0, 2, 1, 0]);
   const models = [front, back],
     renderer = camera(models);
   renderer._cullBackfaces = true;
-  assert.equal(pickModel(renderer, models, 110, 70), 0);
+  assert.equal(pickModel(renderer, models, 110, 70), 1);
+  assert.equal(pickModel(renderer, models, 110, 70, 1), 0);
   renderer._wireframe = true;
-  assert.equal(pickModel(renderer, models, 110, 70), 1);
-  renderer._wireframe = false;
+  assert.equal(pickModel(renderer, models, 110, 70, 1), 0);
   renderer._cullBackfaces = false;
-  assert.equal(pickModel(renderer, models, 110, 70), 1);
+  renderer._wireframe = false;
+  assert.equal(pickModel(renderer, models, 110, 70, 1), 0);
 });

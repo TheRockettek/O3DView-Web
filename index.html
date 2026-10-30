@@ -47,7 +47,7 @@
         <label><input id="highlight-selection" type="checkbox" checked disabled> Highlight selected model</label>
         <label><input id="fullbright" type="checkbox" disabled> Fullbright</label>
         <label><input id="wireframe" type="checkbox" disabled> Wireframe</label>
-        <label><input id="cull-backfaces" type="checkbox" disabled> Cull back faces (desktop style)</label>
+        <label><input id="cull-backfaces" type="checkbox" checked disabled> Cull back faces (desktop style)</label>
         <label><input id="show-gizmos" type="checkbox" checked disabled> Show spline, path and cabin gizmos</label>
         <label><input id="show-light-references" type="checkbox" disabled> Show interior-light references</label>
         <label for="global-night-strength">Global night map strength</label>
@@ -80,6 +80,8 @@
         </form>
         <button id="create-light" class="secondary" disabled>Create directional light</button>
         <button id="create-point-light" class="secondary" disabled>Create point light</button>
+        <label for="scene-light-limit">Maximum rendered scene lights (0–16)</label>
+        <input id="scene-light-limit" type="number" min="0" max="16" step="1" value="16" disabled>
         <p id="light-summary">No lights.</p>
         <ul id="light-list"></ul>
         <label for="light-select">Inspect light</label>
@@ -136,8 +138,8 @@
       </section>
       <section>
         <h2>Scene variables</h2>
-        <p>Manually adjust shared OMSI material and visibility variables. Scripts are not evaluated.</p>
-        <label><input id="bind-light-variables" type="checkbox" disabled> Bind interior-light intensity variables (optional)</label>
+        <p>Manually adjust shared OMSI material, visibility, free-texture, light-brightness, and texture-coordinate variables. Scripts are not evaluated; some desktop variables currently have no rendering effect.</p>
+        <label><input id="bind-light-variables" type="checkbox" checked disabled> Bind interior-light intensity variables</label>
         <form id="variable-form">
           <label for="variable-select">Variable</label>
           <select id="variable-select" disabled><option>No scene variables</option></select>
@@ -194,6 +196,29 @@
             <button type="submit" class="secondary">Apply path point</button>
           </fieldset>
         </form>
+        <form id="cabin-reference-form" hidden>
+          <fieldset id="cabin-reference-fields" disabled>
+            <label for="cabin-reference-point">Referenced path point index</label>
+            <input id="cabin-reference-point" type="number" min="0" step="1" required>
+            <button type="submit" class="secondary">Apply path reference</button>
+          </fieldset>
+        </form>
+        <form id="cabin-entry-options-form" hidden>
+          <fieldset id="cabin-entry-options-fields" disabled>
+            <label><input id="cabin-entry-no-ticket-sale" type="checkbox"> No ticket sale</label>
+            <label><input id="cabin-entry-with-button" type="checkbox"> Requires button</label>
+            <button type="submit" class="secondary">Apply entry options</button>
+          </fieldset>
+        </form>
+        <form id="cabin-metadata-form" hidden>
+          <fieldset id="cabin-metadata-fields" disabled>
+            <label for="cabin-variation">Variation (X Y)</label>
+            <input id="cabin-variation" required>
+            <label id="cabin-parent-label" for="cabin-parent">Parent</label>
+            <input id="cabin-parent">
+            <button type="submit" class="secondary">Apply cabin metadata</button>
+          </fieldset>
+        </form>
         <form id="cabin-item-position-form" hidden>
           <fieldset id="cabin-item-position-fields" disabled>
             <label for="cabin-item-position">Cabin position OMSI (X Y Z)</label>
@@ -208,6 +233,13 @@
             <label for="cabin-seat-rotation">Seat rotation</label>
             <input id="cabin-seat-rotation" type="number" step="any" required>
             <button type="submit" class="secondary">Apply seat properties</button>
+          </fieldset>
+        </form>
+        <form id="cabin-seat-lights-form" hidden>
+          <fieldset id="cabin-seat-lights-fields" disabled>
+            <label for="cabin-seat-light-references">Interior light indices (A B C D; -1 for none, blank to clear)</label>
+            <input id="cabin-seat-light-references">
+            <button type="submit" class="secondary">Apply seat light references</button>
           </fieldset>
         </form>
         <form id="cabin-link-form" hidden>
@@ -355,6 +387,7 @@
     <section class="viewport" aria-label="3D model viewport">
       <canvas id="viewport" aria-label="3D model" tabindex="0"></canvas>
       <div id="light-reference-layer" class="light-reference-layer" aria-label="Interior-light references" hidden></div>
+      <div id="cabin-marker-layer" class="cabin-marker-layer" aria-label="Cabin marker icons" hidden></div>
       <div id="placeholder" class="placeholder">Choose a model to begin</div>
     </section>
   </main>

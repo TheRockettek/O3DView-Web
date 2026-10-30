@@ -1,4 +1,4 @@
-const CACHE = "o3dview-web-v52";
+const CACHE = "o3dview-web-v65";
 const ASSETS = [
   "./",
   "./index.html",
@@ -33,6 +33,17 @@ const ASSETS = [
   "./src/map-transform.js",
   "./src/spline.js",
   "./src/cabin-path.js",
+  "./O3DView/O3DView/Resources/player_standing.o3d",
+  "./O3DView/O3DView/Resources/player_sitting.o3d",
+  "./O3DView/O3DView/Resources/gizmo_seat.png",
+  "./O3DView/O3DView/Resources/gizmo_entry.png",
+  "./O3DView/O3DView/Resources/gizmo_exit.png",
+  "./O3DView/O3DView/Resources/gizmo_link_next.png",
+  "./O3DView/O3DView/Resources/gizmo_link_prev.png",
+  "./O3DView/O3DView/Resources/gizmo_stamper.png",
+  "./O3DView/O3DView/Resources/gizmo_ticket_sale.png",
+  "./O3DView/O3DView/Resources/gizmo_ticket_money.png",
+  "./O3DView/O3DView/Resources/gizmo_ticket_change.png",
   "./src/repaints.js",
   "./src/repaint-session.js",
   "./src/dropdowns.js",

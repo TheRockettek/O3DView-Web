@@ -47,6 +47,8 @@ const materialChildren = new Set([
  * (true), allcolor {diffuse:[r,g,b,a], ambient, specular, emission,
  * specPower}, and texAddress {clamp, mirror, mirrorOnce, border}, with
  * present flags true and border containing four byte values in BGRA order.
+ * freetexes contains {path, varName} texture replacement variables;
+ * texcoordTransXVar and texcoordTransYVar preserve the supported variable names.
  * transmap, nightmap, lightmap, bumpmap and envmap are trimmed texture path
  * strings. Bump and environment maps have corresponding finite
  * bumpmapStrength and envmapStrength values. An
@@ -75,6 +77,8 @@ export function parseCfgMaterials(input) {
   const lines = typeof input === "string" ? input.split(/\r\n|\n|\r/) : input;
   const meshes = [];
   const warnings = [];
+  const stringVariables = [];
+  const floatVariables = [];
   let mesh = null;
   let material = null;
   let disabled = false;
@@ -103,6 +107,42 @@ export function parseCfgMaterials(input) {
     return values;
   }
 
+  function parseLightVariable(line, tag) {
+    const fields = {
+      light: { name: 0, value: null },
+      light_enh: { name: 7, value: 8 },
+      light_enh_2: { name: 17, value: 18 },
+    }[tag];
+    const lastField = fields.value ?? fields.name;
+    const values = [];
+    for (let offset = 0; offset <= lastField; offset++) {
+      const value = lines[line + offset + 1]?.trim();
+      if (
+        value === undefined ||
+        tagPattern.test(value) ||
+        /^-<(?:ENABLED|DISABLED)>-/.test(value)
+      ) {
+        warn(line, `[${tag}] is missing required parameters`);
+        return;
+      }
+      values.push(value);
+    }
+
+    const name = values[fields.name];
+    if (!name) return;
+    const value =
+      fields.value === null
+        ? 0
+        : numberPattern.test(values[fields.value])
+          ? Math.fround(Number(values[fields.value]))
+          : NaN;
+    if (!Number.isFinite(value)) {
+      warn(line, `[${tag}] has an invalid brightness value`);
+      return;
+    }
+    floatVariables.push({ name, value });
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (line.startsWith("-<DISABLED>-")) {
@@ -129,6 +169,30 @@ export function parseCfgMaterials(input) {
     } else if (tag === "lod" || tag === "model") {
       mesh = null;
       material = null;
+    } else if (tag === "illumination_interior") {
+      material = null;
+      if (!mesh) {
+        warn(
+          i,
+          "[illumination_interior] has no preceding [mesh] in this scope",
+        );
+        continue;
+      }
+      const values = parameters(i, 4, tag);
+      if (!values) continue;
+      const references = values.map((value) => Number(value));
+      if (
+        !values.every(
+          (value, index) =>
+            /^-?\d+$/.test(value) &&
+            Number.isSafeInteger(references[index]) &&
+            references[index] >= -1,
+        )
+      ) {
+        warn(i, "[illumination_interior] has invalid light indices");
+        continue;
+      }
+      mesh.illuminationInterior = references;
     } else if (tag === "visible") {
       material = null;
       if (!mesh) {
@@ -161,6 +225,17 @@ export function parseCfgMaterials(input) {
         continue;
       }
       mesh.viewpoint = Number(values[0]);
+    } else if (tag === "texttexture_enh") {
+      material = null;
+      const values = parameters(i, 1, tag);
+      if (values) stringVariables.push({ name: values[0], value: "" });
+    } else if (
+      tag === "light" ||
+      tag === "light_enh" ||
+      tag === "light_enh_2"
+    ) {
+      material = null;
+      parseLightVariable(i, tag);
     } else if (tag === "matl") {
       material = null;
       const values = parameters(i, 2, tag);
@@ -205,6 +280,17 @@ export function parseCfgMaterials(input) {
       const name = tag.slice(5);
       material[name] = values[0];
       material[`${name}Strength`] = strength;
+    } else if (tag === "matl_freetex") {
+      if (!material) {
+        warn(i, `[${tag}] has no active [matl]`);
+        continue;
+      }
+      const values = parameters(i, 2, tag);
+      if (values)
+        (material.freetexes ??= []).push({
+          path: values[0],
+          varName: values[1],
+        });
     } else if (
       tag === "matl_transmap" ||
       tag === "matl_nightmap" ||
@@ -219,6 +305,7 @@ export function parseCfgMaterials(input) {
       material[tag.slice(5)] = values[0];
       if (tag === "matl_lightmap") {
         delete material.lightmapVar;
+        delete material.lightmapStrength;
         const variable = lines[i + 2]?.trim();
         if (
           variable &&
@@ -226,10 +313,13 @@ export function parseCfgMaterials(input) {
           !/^-<(?:ENABLED|DISABLED)>-/.test(variable)
         ) {
           material.lightmapVar = variable;
+          material.lightmapStrength = 0;
         }
       }
     } else if (
       tag === "alphascale" ||
+      tag === "texcoordtransx" ||
+      tag === "texcoordtransy" ||
       tag === "matl_texadress_clamp" ||
       tag === "matl_texadress_mirror" ||
       tag === "matl_texadress_mirroronce" ||
@@ -241,10 +331,18 @@ export function parseCfgMaterials(input) {
         warn(i, `[${tag}] has no active [matl]`);
         continue;
       }
-      if (tag === "alphascale") {
+      if (
+        tag === "alphascale" ||
+        tag === "texcoordtransx" ||
+        tag === "texcoordtransy"
+      ) {
         const values = parameters(i, 1, tag);
         if (!values) continue;
-        material.alphaScaleVar = values[0];
+        if (tag === "alphascale") material.alphaScaleVar = values[0];
+        else
+          material[
+            tag === "texcoordtransx" ? "texcoordTransXVar" : "texcoordTransYVar"
+          ] = values[0];
       } else if (tag === "matl_texadress_border") {
         const values = parameters(i, 4, tag);
         if (!values) continue;
@@ -309,5 +407,5 @@ export function parseCfgMaterials(input) {
     }
   }
   if (disabled) warnings.push("Unterminated -<DISABLED>- section");
-  return { meshes, warnings };
+  return { meshes, stringVariables, floatVariables, warnings };
 }

@@ -30,15 +30,21 @@ otherwise select the entry to open. Folder drops require a browser with
 directory drag-and-drop support; use the folder chooser if unavailable. For referenced files
 outside the selected folder, select a common parent folder. Browser file
 access is restricted to what you explicitly select; your models are read
-locally and are not uploaded or cached by the app. Left-drag to orbit, right-
-or middle-drag to pan, and scroll to zoom. Fit view recenters the scene.
+locally and are not uploaded or cached by the app. Left-drag or Alt+middle-drag
+to orbit, right- or middle-drag to pan, and left+right or middle+right drag or
+scroll to zoom. Mouse pan uses the desktop viewer's default movement per
+pointer pixel, independent of zoom. Wheel zoom uses the desktop viewer's
+default sensitivity. Fit view recenters the scene.
 Version 4+ O3D files using the encrypted-vertex variant recognized by
 [OpenBusTest](https://github.com/TheRockettek/OpenBusTest) are decoded from
 their header key and options. This variant obfuscates vertex position, normal
 and UV components; it is not general-purpose or cryptographic decryption.
-Focus the viewport and use the arrow keys to pan in camera space; movement
-scales with the current zoom. The web and WebGL renderers use the same camera
-controls.
+Focus the viewport and hold the arrow keys to move continuously in camera
+space at the desktop viewer's default speed, independent of zoom. The web and
+WebGL renderers use the same camera controls.
+With the page or viewport focused, **F** focuses the selected model,
+**Delete** deletes a deletable selected hierarchy item, and **Ctrl+D** duplicates
+the selected model, model-only group, or light when supported.
 **Focus selected model** (or F while the page or viewport has focus) centers
 the model selected in the material inspector, including a hidden model, without
 changing the viewing angle. Select a model in the scene list or material
@@ -78,15 +84,18 @@ repaint bindings, and copied LOD thresholds and group visibility are separate
 from the source. The first copied model is selected. Groups containing lights,
 cabin entries, splines, paths or other non-model entries cannot be duplicated.
 Viewport picking uses triangle geometry and visibility, not per-pixel texture
-alpha or special depth modes, so transparent surfaces can still be selected.
+alpha or special depth modes, matching the desktop ray picker; transparent
+surfaces can still be selected. Back-face culling affects rendering only;
+desktop selection tests both triangle windings, so web picking does too.
 Clicking a generated passenger-cabin marker or cabin-path strip selects its
 associated cabin item; other geometry hits select the model occurrence.
 Repeated clicks at the same location step through overlapping models.
 Alt-click geometry to select its containing hierarchy group while keeping the
 hit model selected in the material inspector.
-Enable **Cull back faces (desktop style)** to hide back-facing triangles in
-filled rendering and exclude them from picking. It is off by default to retain
-the original web viewer's two-sided rendering; wireframe remains two-sided.
+**Cull back faces (desktop style)** is enabled by default to match the desktop
+viewer in filled rendering. Clear it to show back-facing triangles; wireframe
+remains two-sided. Picking tests both triangle windings regardless of this
+rendering option, as the desktop picker does.
 The scene tree groups loaded configurations, LODs, meshes, lights and generated
 splines and paths by their source occurrence. Expand or collapse groups and use
 the filter to find descendants. LOD groups, meshes and lights can be toggled
@@ -224,7 +233,7 @@ viewer. Lights can be deleted from the current scene without changing source
 files. **Duplicate selected light** copies its current scene settings into a
 new independent light next to it in the scene tree. It does not retain the
 source configuration or OMSI variable binding, and it does not change source
-files or the original light. A duplicate beyond the 15-light rendering limit
+files or the original light. A duplicate beyond the 16-light rendering limit
 remains editable but is not rendered until a slot opens. Enable
 **Use editable desktop-style sun** to replace the original web viewer lighting
 with the desktop's default directional sun. Its direction,
@@ -237,22 +246,25 @@ current lighting mode and values; the Lights panel remains the place to edit
 those values. The sun has no spatial focus target and cannot be deleted, but it
 can be moved between scene-tree parents for organization. It is viewer-session
 state and is not written to source files.
-As in the desktop default of 16
-lights including the sun, only the first 15 scene lights are rendered; a
-warning is shown when more are present. Disabled lights still occupy a slot,
+As in the desktop default, the scene-light limit starts at 16; the Lights panel
+lets you lower it to any integer from 0 to 16, and saves the choice in this
+browser. The optional desktop-style sun is separate from this scene-light
+limit. Disabled lights still occupy a slot,
 as with the desktop renderer's first-light limit. Lights beyond the limit can
 still be edited and toggled; they become eligible for rendering if earlier
-lights are removed. Their OMSI variable names are shown
-but do not control the lights by default, matching the desktop loader's static
-behavior. The optional **Bind interior-light intensity variables** setting
-exposes these names in the scene variables panel and applies manual changes and
-repaint setvars to matching lights. This is an opt-in extension, not a claim
-that the desktop loader's current light binding works.
+lights are removed. Their OMSI variable names remain available to the default
+variable binding, but cannot make over-limit lights render. Interior-light
+intensity variables are bound by default, matching the desktop viewer. Clear
+**Bind interior-light intensity variables** to disable manual changes and
+repaint setvars for lights in this browser session.
 Enable **Show interior-light references** to overlay each light's current
 position in the viewport. Markers follow camera orbit, pan, zoom and resize,
 and are hidden while outside the view. Selecting a marker selects that light
 in the hierarchy and inspector; the overlay does not change light enablement
 or rendering and is independent of the spline, path and cabin gizmo toggle.
+Selecting a CFG mesh or passenger seat with `[illumination_interior]`
+references also draws screen-space lines to its referenced lights while the
+toggle is on; these lines do not depth-occlude.
 CTI files discovered in a configuration's CTC directory are enabled by
 default. Additional CTIs and their textures can be selected in the Repaints
 panel; use the folder chooser when a CTI refers to nested paths. Existing
@@ -276,7 +288,13 @@ commands for the same variable use the last condition.
 Material-bound variables range from 0 to 1 and start at 1 to preserve the
 initial material appearance, even when also bound to mesh visibility. This
 differs from the desktop lightmap variable's displayed default of 0. OMSI
-scripts and other variable-driven behavior are not evaluated. Alpha scaling
+scripts and other variable-driven behavior are not evaluated. `[light]`,
+`[light_enh]`, and `[light_enh_2]` brightness variables are exposed with the
+desktop defaults, but their desktop callbacks do not change rendering. Desktop
+`[texcoordtransx]` and `[texcoordtransy]` float variables are exposed with
+their default value of 0; the desktop callbacks currently do not affect
+rendering. `[texttexture_enh]` string variables are also exposed with empty
+defaults, but this viewer does not generate dynamic text textures. Alpha scaling
 applies after cutout testing, and requires a blend alpha mode to fade a
 material that has an explicit CFG alpha mode. Bound lightmap strength is
 controlled by the variable panel rather than the material inspector. The
@@ -285,13 +303,15 @@ inspector can also adjust alpha and depth modes for the current scene.
 Diffuse textures are resolved from the selected files using the desktop
 viewer’s model and ancestor `texture` folders (DDS takes precedence). PNG,
 JPEG, BMP, GIF and WebP support depends on browser decoding. Legacy 2D
-DDS RGB(A), A8 and DXT1 through DXT5 images are decoded locally, as are
-uncompressed and RLE indexed, 15/16/24/32-bit truecolor, and grayscale TGA
-images. BMP, PNG and JPEG
+DDS RGB(A), A8, DXT1 through DXT5, and 2D DX10 BC1/BC2/BC3 images are decoded
+locally, as are uncompressed and RLE indexed, 15/16/24/32-bit truecolor, and
+grayscale TGA images. BMP, PNG and JPEG
 files named `.dds` are recognized by their contents. Unsupported,
 unreadable or missing textures produce warnings. Select a folder when the
 model refers to other files. CFG material maps use the configuration's
 directory and ancestor texture folders rather than the model's directory.
+`[matl_freetex]` variables can replace matching material maps with texture
+files from the selected folder; source files are not changed.
 
 Map tiles can load referenced scenery objects from the selected files; choose
 an OMSI parent folder containing both the map and its `Sceneryobjects` assets.
@@ -328,25 +348,45 @@ show markers colored by record type (blue seats, yellow stampers, orange ticket
 sales, green money points and magenta change points) and can have their
 positions edited in the inspector;
 changes affect the current scene only. Records that only reference a path point,
-such as entries and exits, use the path marker and follow edits to that point.
+such as entries and exits, follow edits to that point. Entries have distinct
+green markers and exits red markers, offset slightly from the path point so
+their colors remain visible; clicking them selects the corresponding cabin
+record.
 Indexed records that also contain an explicit position, such as stampers and
 ticket-sale points, get separate editable markers. All cabin markers share the
-gizmo toggle and export behavior. These simplified markers are not the
-desktop's textured billboard icons or selected-seat preview. Seat height and
-rotation can be edited for the current scene; these attributes update the
-inspector data, not the position-only marker. Other cabin records are read-only.
+gizmo toggle and export behavior. Seat markers are low-profile arrows oriented
+by their rotation; editing seat properties regenerates the marker. Selecting a
+seat displays the desktop standing or sitting preview mesh according to its
+height, oriented by its rotation. The temporary preview is removed on
+deselection and excluded from exports. Positioned seats, stampers, and ticket
+points also show the corresponding desktop icon at the projected marker
+position; the existing 3D markers remain for picking. These screen-space icons
+do not depth-occlude and are not an exact match for desktop billboard sizing.
+Entry/exit and link-to-next/previous references show their desktop icons at the
+referenced cabin path point; entry and exit icons use the same slight offset as
+their generated marker meshes.
+Path-point indices on entries, exits, next/previous links, stampers, and ticket
+sales can be edited for the current scene. Changing an entry, exit, or link
+reference also moves its icon to the newly referenced point; source files remain
+unchanged. Entry options for disabling ticket sales and requiring a button can
+also be inspected and edited for the current scene. Ticket-point variation and
+parent metadata, along with seat interior-light indices, can also be edited for
+the current scene; other cabin record metadata is read-only.
 Map terrain and attachments are not rendered.
 
 ## Current limitations
 
 This port is in progress. Scene/configuration support is partial, and may
 show warnings for missing references. Saving edits back to source files, animation,
-many other material tags, color-mapped TGA, DDS DX10/cubemaps/volumes,
+many other material tags, DX10 DDS formats beyond 2D BC1/BC2/BC3,
+DDS arrays/cubemaps/volumes,
 map terrain, editable spline properties, advanced cabin gizmos and
 several other desktop features are not implemented. Do not rely on it for
 desktop feature parity or visually exact OMSI rendering. Encrypted models
-are not supported. OBJ smoothing groups and MTL texture options are not
-implemented. Transparent geometry is sorted by material rather than by triangle.
+are not generally supported; only the version 4+ encrypted-vertex variant
+used by OpenBusTest is handled. OBJ smoothing groups and MTL texture options
+are not implemented. Transparent geometry is sorted by material rather than
+by triangle.
 
 ## Tests
 

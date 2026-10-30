@@ -2,7 +2,8 @@ export function moveSceneNode(siblings, node, direction) {
   if (!Array.isArray(siblings) || !node || ![-1, 1].includes(direction))
     throw new TypeError("Invalid scene node move");
   const index = siblings.indexOf(node);
-  if (index === -1) throw new RangeError("Scene node is not in this sibling list");
+  if (index === -1)
+    throw new RangeError("Scene node is not in this sibling list");
   const target = index + direction;
   if (target < 0 || target >= siblings.length) return false;
   [siblings[index], siblings[target]] = [siblings[target], siblings[index]];
@@ -94,7 +95,9 @@ export function reparentSceneNode(hierarchy, node, parent) {
   if (parent !== null && !findSceneNodeParent(hierarchy, parent))
     throw new RangeError("Scene node parent is not in this hierarchy");
   if (parent !== null && containsSceneNode(node, parent))
-    throw new TypeError("A scene node cannot be moved into itself or a descendant");
+    throw new TypeError(
+      "A scene node cannot be moved into itself or a descendant",
+    );
   if (source.parent === parent) return null;
 
   const destination = parent ? parent.children : hierarchy;

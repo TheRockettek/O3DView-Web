@@ -4,6 +4,7 @@ import {
   focusModel,
   selectionPulse,
   animateSelection,
+  wheelZoom,
 } from "./camera-controls.js";
 import { encodeInteriorLights, MAX_INTERIOR_LIGHTS } from "./light-data.js";
 
@@ -13,9 +14,9 @@ const SHADER = /* wgsl */ `
 struct Camera {
   viewProjection: mat4x4<f32>,
   eye: vec4<f32>,
-  lightPositions: array<vec4<f32>, 15>,
-  lightColors: array<vec4<f32>, 15>,
-  lightAmbients: array<vec4<f32>, 15>,
+  lightPositions: array<vec4<f32>, 16>,
+  lightColors: array<vec4<f32>, 16>,
+  lightAmbients: array<vec4<f32>, 16>,
   selection: vec4<f32>,
   sunPosition: vec4<f32>,
   sunColor: vec4<f32>,
@@ -100,11 +101,11 @@ fn safeNormal(v: vec3<f32>) -> vec3<f32> {
   if (camera.eye.w < 0.5) {
     color = select(albedo.rgb * (0.25 + 0.75 * diffuseLight) +
       material.specularPower.rgb * specular * 0.5, vec3<f32>(0.0), camera.selection.y > 0.5);
-  for (var i = 0u; i < 16u; i++) {
+  for (var i = 0u; i < 17u; i++) {
     var position: vec4<f32>;
     var pointColor: vec4<f32>;
     var ambient: vec3<f32>;
-    if (i == 15u) {
+    if (i == 16u) {
       position = camera.sunPosition;
       pointColor = camera.sunColor;
       ambient = camera.sunAmbient.rgb;
@@ -367,7 +368,7 @@ export class Renderer {
     this._draws = [];
     this._modelVisibility = [];
     this._wireframe = false;
-    this._cullBackfaces = false;
+    this._cullBackfaces = true;
     this._fullbright = false;
     this._modelBounds = [];
     this._objectBuffers = [];
@@ -589,22 +590,13 @@ export class Renderer {
     this._pointerMove = controls.move;
     this._pointerUp = controls.up;
     this._keyDown = controls.keyDown;
+    this._keyUp = controls.keyUp;
+    this._blur = controls.blur;
+    this._disposeControls = controls.dispose;
     this._contextMenu = controls.contextMenu;
     this._wheel = (event) => {
       event.preventDefault();
-      const pixels =
-        event.deltaY *
-        (event.deltaMode === 1
-          ? 16
-          : event.deltaMode === 2
-            ? this.canvas.clientHeight || 800
-            : 1);
-      this._distance = clamp(
-        this._distance * Math.exp(clamp(pixels * 0.001, -2, 2)),
-        this._viewRadius * 0.001,
-        this._viewRadius * 10000,
-      );
-      this._requestFrame();
+      wheelZoom(this, event);
     };
     this._resize = () => this._requestFrame();
     this.canvas.addEventListener("pointerdown", this._pointerDown);
@@ -807,9 +799,9 @@ export class Renderer {
     this._requestFrame();
   }
 
-  setLights(lights) {
+  setLights(lights, limit = MAX_INTERIOR_LIGHTS) {
     this._assertUsable();
-    this._lights = encodeInteriorLights(lights);
+    this._lights = encodeInteriorLights(lights, limit);
     this._requestFrame();
   }
 
@@ -1135,6 +1127,7 @@ export class Renderer {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this._disposeControls?.();
     if (this._frame !== null) cancelAnimationFrame(this._frame);
     this._observer?.disconnect();
     globalThis.removeEventListener?.("resize", this._resize);

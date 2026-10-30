@@ -1,4 +1,6 @@
-const FOV = Math.PI / 3;
+const PAN_SPEED = 0.013;
+const KEYBOARD_MOVE_SPEED = 10;
+const PITCH_LIMIT = Math.PI / 2 - 1e-6;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 function boundsForVertices(arrays) {
@@ -26,6 +28,21 @@ function boundsForVertices(arrays) {
 
 export function modelBounds(vertices) {
   return boundsForVertices([vertices]);
+}
+
+export function wheelZoom(renderer, event) {
+  const wheelUnits =
+    event.deltaMode === 1
+      ? event.deltaY / 3
+      : (event.deltaY *
+          (event.deltaMode === 2 ? renderer.canvas.clientHeight || 800 : 1)) /
+        100;
+  renderer._distance = clamp(
+    renderer._distance * (1 + wheelUnits * 0.3),
+    0.01,
+    renderer._viewRadius * 10000,
+  );
+  renderer._requestFrame();
 }
 
 export function focusModel(renderer, modelIndex) {
@@ -89,39 +106,77 @@ export function animateSelection(renderer) {
 }
 
 export function pointerControls(renderer) {
-  const keyDown = (event) => {
-    const horizontal =
-      event.key === "ArrowLeft" || event.key === "ArrowRight";
-    if (
-      !horizontal &&
-      event.key !== "ArrowUp" &&
-      event.key !== "ArrowDown"
-    )
-      return;
-    event.preventDefault();
-    const step = 0.06 * renderer._distance * Math.tan(FOV / 2);
-    const { _yaw: yaw, _pitch: pitch } = renderer;
-    const right = [Math.sin(yaw), 0, -Math.cos(yaw)];
-    const forward = [
-      -Math.cos(yaw) * Math.cos(pitch),
-      -Math.sin(pitch),
-      -Math.sin(yaw) * Math.cos(pitch),
-    ];
-    const axis = horizontal ? right : forward;
-    const sign =
-      event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
-    renderer._target = renderer._target.map(
-      (value, index) => value + axis[index] * sign * step,
-    );
-    renderer._requestFrame();
+  const movementKeys = new Set();
+  let movementFrame = null,
+    previousMovementFrame = null;
+  const arrowKeys = new Set([
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+  ]);
+  const stopKeyboardMovement = () => {
+    movementKeys.clear();
+    previousMovementFrame = null;
+    if (movementFrame !== null) cancelAnimationFrame(movementFrame);
+    movementFrame = null;
   };
+  const animateKeyboardMovement = (timestamp) => {
+    movementFrame = null;
+    if (!movementKeys.size || renderer.destroyed || renderer.lost) {
+      stopKeyboardMovement();
+      return;
+    }
+    if (previousMovementFrame !== null) {
+      const elapsed = clamp((timestamp - previousMovementFrame) / 1000, 0, 0.1);
+      let horizontal = 0,
+        vertical = 0;
+      if (movementKeys.has("ArrowLeft")) horizontal = -1;
+      else if (movementKeys.has("ArrowRight")) horizontal = 1;
+      if (movementKeys.has("ArrowUp")) vertical = 1;
+      else if (movementKeys.has("ArrowDown")) vertical = -1;
+      const step = KEYBOARD_MOVE_SPEED * elapsed;
+      const { _yaw: yaw, _pitch: pitch } = renderer;
+      const right = [Math.sin(yaw), 0, -Math.cos(yaw)];
+      const forward = [
+        -Math.cos(yaw) * Math.cos(pitch),
+        -Math.sin(pitch),
+        -Math.sin(yaw) * Math.cos(pitch),
+      ];
+      renderer._target = renderer._target.map(
+        (value, index) =>
+          value +
+          (right[index] * horizontal + forward[index] * vertical) * step,
+      );
+      renderer._requestFrame();
+    }
+    previousMovementFrame = timestamp;
+    movementFrame = requestAnimationFrame(animateKeyboardMovement);
+  };
+  const keyDown = (event) => {
+    if (!arrowKeys.has(event.key)) return;
+    event.preventDefault();
+    movementKeys.add(event.key);
+    if (movementFrame === null) {
+      previousMovementFrame = null;
+      movementFrame = requestAnimationFrame(animateKeyboardMovement);
+    }
+  };
+  const keyUp = (event) => {
+    if (!arrowKeys.has(event.key)) return;
+    movementKeys.delete(event.key);
+    if (!movementKeys.size) stopKeyboardMovement();
+  };
+  const blur = stopKeyboardMovement;
+  globalThis.addEventListener?.("keyup", keyUp);
+  globalThis.addEventListener?.("blur", blur);
   const down = (event) => {
     if (![0, 1, 2].includes(event.button) || renderer._pointer) return;
     renderer._pointer = {
       id: event.pointerId,
       x: event.clientX,
       y: event.clientY,
-      pan: event.button !== 0,
+      button: event.button,
     };
     renderer.canvas.setPointerCapture?.(event.pointerId);
     event.preventDefault();
@@ -131,11 +186,21 @@ export function pointerControls(renderer) {
     if (!pointer || pointer.id !== event.pointerId) return;
     const dx = event.clientX - pointer.x,
       dy = event.clientY - pointer.y;
-    if (pointer.pan) {
-      const { _yaw: yaw, _pitch: pitch, _distance: distance } = renderer;
-      const scale =
-        (2 * distance * Math.tan(FOV / 2)) /
-        (renderer.canvas.clientHeight || renderer.canvas.height || 1);
+    const zoom = (event.buttons & 2) !== 0 && (event.buttons & (1 | 4)) !== 0;
+    if (zoom) {
+      renderer._distance = clamp(
+        renderer._distance * (1 - dy * 0.013),
+        renderer._viewRadius * 0.001,
+        renderer._viewRadius * 10000,
+      );
+      pointer.x = event.clientX;
+      pointer.y = event.clientY;
+      renderer._requestFrame();
+      return;
+    }
+    const pan = pointer.button === 2 || (pointer.button === 1 && !event.altKey);
+    if (pan) {
+      const { _yaw: yaw, _pitch: pitch } = renderer;
       const right = [Math.sin(yaw), 0, -Math.cos(yaw)];
       const up = [
         -Math.sin(pitch) * Math.cos(yaw),
@@ -143,14 +208,14 @@ export function pointerControls(renderer) {
         -Math.sin(pitch) * Math.sin(yaw),
       ];
       renderer._target = renderer._target.map(
-        (value, i) => value + (-dx * right[i] + dy * up[i]) * scale,
+        (value, i) => value + (-dx * right[i] + dy * up[i]) * PAN_SPEED,
       );
     } else {
       renderer._yaw += dx * 0.005;
       renderer._pitch = clamp(
         renderer._pitch + dy * 0.005,
-        -Math.PI / 2 + 0.001,
-        Math.PI / 2 - 0.001,
+        -PITCH_LIMIT,
+        PITCH_LIMIT,
       );
     }
     pointer.x = event.clientX;
@@ -168,6 +233,13 @@ export function pointerControls(renderer) {
     move,
     up,
     keyDown,
+    keyUp,
+    blur,
+    dispose() {
+      stopKeyboardMovement();
+      globalThis.removeEventListener?.("keyup", keyUp);
+      globalThis.removeEventListener?.("blur", blur);
+    },
     contextMenu: (event) => event.preventDefault(),
   };
 }

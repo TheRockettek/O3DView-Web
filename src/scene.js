@@ -13,14 +13,10 @@ import { parseInteriorLights } from "./interior-lights.js";
 import { parseMapTile } from "./map-tile.js";
 import { placeMapVertices, placeMapLight } from "./map-transform.js";
 import { parseCTC, parseCTI } from "./repaints.js";
-import {
-  parseSplineProfile,
-  parseScoPaths,
-} from "./spline.js";
+import { parseSplineProfile, parseScoPaths } from "./spline.js";
 import { generatePlacedSplineGeometry } from "./spline-edit.js";
 import {
   CABIN_MARKER_COLORS,
-  CABIN_MARKER_TRIANGLE_COUNT,
   parseCabinPaths,
   parsePassengerCabin,
   generateCabinMarkerMesh,
@@ -141,7 +137,7 @@ async function decodeTexture(record, buffer) {
  * Unsupported commands are reported, not interpreted.
  * @param {File[]} files
  * @param {string[]} entryPaths
- * @returns {Promise<{models: Array, lods: Array, warnings: string[]}>}
+ * @returns {Promise<{models: Array, lods: Array, stringVariables: Array, floatVariables: Array, warnings: string[]}>}
  */
 export async function loadScene(files, entryPaths, options = {}) {
   const models = [];
@@ -150,6 +146,8 @@ export async function loadScene(files, entryPaths, options = {}) {
   const hierarchy = [];
   const warnings = [];
   const repaintGroups = [];
+  const stringVariables = new Map();
+  const floatVariables = new Map();
   const byPath = new Map();
   const folded = new Map();
   const cache = new Map();
@@ -489,6 +487,15 @@ export async function loadScene(files, entryPaths, options = {}) {
                 material.alphaScaleVar = override.alphaScaleVar;
               if (override.lightmapVar)
                 material.lightmapVar = override.lightmapVar;
+              if (override.texcoordTransXVar)
+                material.texcoordTransXVar = override.texcoordTransXVar;
+              if (override.texcoordTransYVar)
+                material.texcoordTransYVar = override.texcoordTransYVar;
+              if (override.freetexes)
+                material.freeTextures = override.freetexes.map((entry) => ({
+                  ...entry,
+                  source: cfgSource,
+                }));
             }
             if (override?.allcolor) {
               material.diffuse = [...override.allcolor.diffuse];
@@ -520,6 +527,7 @@ export async function loadScene(files, entryPaths, options = {}) {
             ? {
                 o3dMetadata: {
                   version: parsed.version,
+                  encryptionKey: parsed.encryptionKey,
                   extendedOptions: parsed.extendedOptions,
                   bones: parsed.bones,
                 },
@@ -533,6 +541,11 @@ export async function loadScene(files, entryPaths, options = {}) {
                 visibles: cfgMesh.visibles.map((condition) => ({
                   ...condition,
                 })),
+              }
+            : {}),
+          ...(cfgMesh?.illuminationInterior
+            ? {
+                illuminationInterior: [...cfgMesh.illuminationInterior],
               }
             : {}),
         });
@@ -604,6 +617,11 @@ export async function loadScene(files, entryPaths, options = {}) {
       parent.push(node);
       const lines = text.split(/\r\n|\n|\r/);
       const parsedMaterials = parseCfgMaterials(lines);
+      for (const variable of parsedMaterials.stringVariables)
+        if (!stringVariables.has(variable.name))
+          stringVariables.set(variable.name, variable);
+      for (const variable of parsedMaterials.floatVariables)
+        floatVariables.set(variable.name, variable);
       const parsedLights = parseInteriorLights(lines);
       const parsedRepaint = parseCTC(lines);
       const parsedPaths =
@@ -752,9 +770,17 @@ export async function loadScene(files, entryPaths, options = {}) {
             "matl_lightmap",
             "matl_bumpmap",
             "matl_envmap",
+            "matl_freetex",
             "alphascale",
+            "texttexture_enh",
+            "light",
+            "light_enh",
+            "light_enh_2",
+            "texcoordtransx",
+            "texcoordtransy",
             "viewpoint",
             "visible",
+            "illumination_interior",
             "interiorlight",
             "ctc",
             "ctctexture",
@@ -790,6 +816,7 @@ export async function loadScene(files, entryPaths, options = {}) {
           );
       }
       let cabinPaths = null;
+      let cabinPathState = null;
       if (cabinPath) {
         const child = reference(
           directory(record.path),
@@ -802,7 +829,13 @@ export async function loadScene(files, entryPaths, options = {}) {
               decodeConfiguration(await read(child)),
             );
             cabinPaths = paths;
-            const pathState = { paths, placement, modelIndex: null };
+            const pathState = {
+              paths,
+              placement,
+              modelIndex: null,
+              specialMarkerItems: [],
+            };
+            cabinPathState = pathState;
             const geometry = generateCabinPathMesh(paths);
             warnings.push(
               ...[...paths.warnings, ...geometry.warnings].map(
@@ -867,27 +900,30 @@ export async function loadScene(files, entryPaths, options = {}) {
                   "Cabin path placement exceeds 32-bit float range",
                 );
               const cabinPathPointItems = points.map((point) => point.info);
-              const cabinPathPointMarkerTriangleStart =
-                geometry.triangles.length / 4 -
-                cabinPathPointItems.length * CABIN_MARKER_TRIANGLE_COUNT;
               models.push({
                 name: "Cabin Paths",
                 cabinPathSource: child.path,
+                cabinPathAllLinkItems: links.map((link) => link.info),
                 cabinPathLinkItems,
                 cabinPathPointItems,
-                cabinPathPointMarkerTriangleStart,
+                cabinPathPointMarkerTriangleStart:
+                  geometry.pointMarkerTriangleStart,
+                cabinPathSpecialMarkerItems: [],
+                cabinPathSpecialMarkerTriangleStart:
+                  geometry.specialMarkerTriangleStart,
                 vertices,
                 triangles: geometry.triangles,
                 gizmoVisible: true,
                 materials: [
-                  {
-                    diffuse: [1, 0.4, 0.1, 1],
-                    spec: [0, 0, 0],
-                    emission: [0, 0, 0],
-                    specPower: 0,
-                    textureName: "",
-                  },
-                ],
+                  [1, 0.4, 0.1, 1],
+                  ...CABIN_MARKER_COLORS.slice(1),
+                ].map((diffuse) => ({
+                  diffuse: [...diffuse],
+                  spec: [0, 0, 0],
+                  emission: [0, 0, 0],
+                  specPower: 0,
+                  textureName: "",
+                })),
                 transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
                 ...(placement ? { mapPlacement: placement } : {}),
               });
@@ -939,11 +975,45 @@ export async function loadScene(files, entryPaths, options = {}) {
                 info: {
                   ...item,
                   source: child.path,
+                  ...(cabinPathState ? { pathState: cabinPathState } : {}),
                   ...(placement ? { mapPlacement: placement } : {}),
                   ...(point && !item.position ? { position: point } : {}),
                 },
               };
             });
+            const cabinPathSpecialMarkerItems = items
+              .filter(
+                (item) =>
+                  ["entry", "exit"].includes(item.info.kind) &&
+                  Array.isArray(item.info.position),
+              )
+              .map((item) => item.info);
+            if (
+              cabinPathState &&
+              cabinPathState.modelIndex !== null &&
+              cabinPathSpecialMarkerItems.length
+            ) {
+              cabinPathState.specialMarkerItems = cabinPathSpecialMarkerItems;
+              const geometry = generateCabinPathMesh(
+                cabinPaths,
+                cabinPathSpecialMarkerItems,
+              );
+              const model = models[cabinPathState.modelIndex];
+              const vertices = placement
+                ? placeMapVertices(geometry.vertices, placement)
+                : geometry.vertices;
+              if (!vertices.every(Number.isFinite))
+                throw new RangeError(
+                  "Cabin path markers exceed 32-bit float range",
+                );
+              model.vertices = vertices;
+              model.triangles = geometry.triangles;
+              model.cabinPathSpecialMarkerItems = cabinPathSpecialMarkerItems;
+              model.cabinPathPointMarkerTriangleStart =
+                geometry.pointMarkerTriangleStart;
+              model.cabinPathSpecialMarkerTriangleStart =
+                geometry.specialMarkerTriangleStart;
+            }
             if (items.length) {
               const cabinNode = {
                 type: "cabin",
@@ -955,8 +1025,7 @@ export async function loadScene(files, entryPaths, options = {}) {
               const markerItems = items
                 .filter(
                   (item) =>
-                    item.hasDirectPosition &&
-                    Array.isArray(item.info.position),
+                    item.hasDirectPosition && Array.isArray(item.info.position),
                 )
                 .map((item) => item.info);
               if (markerItems.length) {
@@ -977,15 +1046,13 @@ export async function loadScene(files, entryPaths, options = {}) {
                     triangles: geometry.triangles,
                     gizmoVisible: true,
                     materials: CABIN_MARKER_COLORS.map((diffuse) => ({
-                        diffuse: [...diffuse],
-                        spec: [0, 0, 0],
-                        emission: [0, 0, 0],
-                        specPower: 0,
-                        textureName: "",
-                      })),
-                    transform: [
-                      1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-                    ],
+                      diffuse: [...diffuse],
+                      spec: [0, 0, 0],
+                      emission: [0, 0, 0],
+                      specPower: 0,
+                      textureName: "",
+                    })),
+                    transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
                     ...(placement ? { mapPlacement: placement } : {}),
                   });
                   cabinNode.children.push({
@@ -1193,5 +1260,7 @@ export async function loadScene(files, entryPaths, options = {}) {
     warnings,
     repaintGroups,
     repaintTextures,
+    stringVariables: [...stringVariables.values()],
+    floatVariables: [...floatVariables.values()],
   };
 }

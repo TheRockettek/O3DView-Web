@@ -23,6 +23,7 @@ function model() {
     ],
     o3dMetadata: {
       version: 3,
+      encryptionKey: 0xffffffff,
       extendedOptions: 0,
       bones: [{ name: "bé", weights: [{ index: 1, weight: 0.75 }] }],
     },
@@ -72,7 +73,7 @@ test("scene loading retains O3D metadata and writing retains bones and material 
 test("repository O3D fixtures round-trip geometry, materials, bones, and format metadata", () => {
   for (const name of ["player_standing.o3d", "player_sitting.o3d"]) {
     const bytes = readFileSync(
-      new URL(`../../O3DView/O3DView/Resources/${name}`, import.meta.url),
+      new URL(`../O3DView/O3DView/Resources/${name}`, import.meta.url),
     );
     const original = parseO3D(
       bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
@@ -81,6 +82,7 @@ test("repository O3D fixtures round-trip geometry, materials, bones, and format 
       ...original,
       o3dMetadata: {
         version: original.version,
+        encryptionKey: original.encryptionKey,
         extendedOptions: original.extendedOptions,
         bones: original.bones,
       },

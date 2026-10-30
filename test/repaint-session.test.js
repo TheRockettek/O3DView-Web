@@ -143,6 +143,18 @@ test("CTC scopes CTIs and applies and restores diffuse and bump maps with setvar
   );
 });
 
+test("repaint session exposes selected-folder texture loading for string variables", async () => {
+  const { session } = await fixture();
+  const texture = await session.loadTexture(
+    "Bus/model/model.cfg",
+    "body.png",
+  );
+  assert.equal(texture.bitmap.path, "Bus/texture/body.png");
+  assert.equal(texture.hasAlpha, false);
+  session.dispose();
+  assert.equal(texture.bitmap.closed, 1);
+});
+
 test("missing repaint texture leaves prior scene and variables unchanged", async () => {
   const { result, session, variables, visibility, renderer } = await fixture();
   await session.apply(renderer, "Blue", variables, visibility);
@@ -541,5 +553,54 @@ test("repaint setvars update light intensities and restore them after a later fa
     lights.map((light) => light.intensity),
     [0.25, 0.5],
   );
+  session.dispose();
+});
+
+test("repaint setvars ignore matching string variables like the desktop", async () => {
+  const material = { textureName: "body.png", texture: {} };
+  const models = [{ materials: [material] }];
+  const groups = [
+    {
+      modelIndices: [0],
+      ctc: { textures: [{ name: "Body", path: "body.png" }] },
+      ctis: [
+        {
+          source: "paint.cti",
+          items: [
+            {
+              name: "Blue",
+              slot: "Body",
+              path: "blue.png",
+              setvars: [{ name: "display_text", value: 0.5 }],
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  const session = createRepaintSession(models, groups, {
+    load: async () => ({ bitmap: {}, hasAlpha: false }),
+    dispose() {},
+  });
+  const variable = {
+    name: "display_text",
+    value: "",
+    stringType: true,
+    bindings: [],
+    visibilityBindings: [],
+  };
+  const warnings = await session.apply(
+    { updateMaterial() {} },
+    "Blue",
+    [variable],
+    {
+      models,
+      manualVisibility: [true],
+      configVisibility: [true],
+      viewpoint: 0,
+    },
+  );
+  assert.equal(variable.value, "");
+  assert.deepEqual(warnings, []);
   session.dispose();
 });

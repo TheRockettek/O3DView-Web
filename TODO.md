@@ -103,8 +103,10 @@ These features are not necessarily equivalent in all cases. See
   and viewport; inspect source, mesh metadata and object-specific properties.
   The hierarchy inspector now reports a selected model's source name, vertex
   and triangle counts, material count and O3D version when available. Models
-  can be selected by viewport triangle picking, but picking does not yet
-  account for texture alpha or special depth modes. Support general objects;
+  can be selected by viewport triangle picking. Picking ignores per-pixel
+  texture alpha and special depth modes, matching the desktop ray picker;
+  back-face culling affects rendering, not desktop or web selection. Support
+  general objects;
   clicking passenger-cabin or path-point markers or path strips selects the
   corresponding cabin item in the inspector. Alt-clicking model geometry
   selects its containing hierarchy group. Interior-light viewport markers
@@ -131,16 +133,28 @@ These features are not necessarily equivalent in all cases. See
   positions, and each valid point has a marker in the generated cabin-path
   mesh. Selected path links can be focused at the midpoint of their placed
   endpoints. Passenger cabin records with explicit positions, including indexed
-  records such as stampers and ticket points, also have editable markers;
-  records with only a path-point reference share the corresponding point marker.
-  Direct-position markers are now color-coded by record type, but remain
-  simplified geometry rather than desktop textured billboards or seat previews.
+  records such as stampers and ticket points, also have editable markers.
+  Entry and exit references have distinct green and red markers, offset slightly
+  from their path points so both remain visible. Direct-position markers are
+  color-coded by record type. Positioned seats, stampers, and ticket-sale points
+  also show the corresponding desktop icon at their projected position; the
+  underlying meshes remain for picking. These fixed-size screen overlays do not
+  depth-occlude like the desktop billboards.
   Viewport picks on passenger-cabin and path-point markers select the
   associated cabin record; path-strip hits select their corresponding link.
   Positioned cabin items can be focused at their placed world positions.
-  Seat height and rotation are editable for the current scene; the marker
-  continues to represent position only.
-  Other cabin gizmos, editing and real-asset comparison remain.
+  Seat markers indicate rotation with oriented arrows, and seat-property edits
+  rebuild them. Selecting a seat displays the desktop standing or sitting
+  preview according to height and rotation; the preview is temporary and
+  excluded from exports. Entry, exit and link-to-next/previous records show
+  their desktop icons at referenced path points. Path-point indices on
+  entries/exits, next/previous links, stampers, and ticket sales are editable
+  for the current scene. Ticket-point variation and parent fields, entry
+  ticket/button options, and seat interior-light references are also editable.
+  Selected CFG meshes and seats with interior-light references draw lines to
+  those lights when the light-reference overlay is enabled; other cabin record
+  metadata remains read-only.
+  Remaining cabin gizmos, broader editing and real-asset comparison remain.
   Desktop: [loader](../O3DView/O3DView/FileLoader.cs),
   [inspector](../O3DView/O3DView/GUI/InspectorWindow.cs).
 - [ ] **Complete lighting controls.** Integrate light transforms and selection
@@ -152,21 +166,31 @@ These features are not necessarily equivalent in all cases. See
   and directional lights can be created, duplicated and edited for the
   current scene;
   ambient-only and desktop-style non-rendering spot modes are selectable.
-  An opt-in extension binds interior-light intensity to scene
-  variables (the desktop loader currently leaves these bindings static). Existing
-  interior lights can be toggled and their world position, color, range and
-  intensity inspected and edited for the current scene.
+  Interior-light intensity variables are bound by default as on desktop; the
+  web checkbox can disable them for the current session. Existing interior
+  lights can be toggled and their world position, color, range and intensity
+  inspected and edited for the current scene.
   The desktop default also takes the first 16 lights before considering whether
-  they are enabled; compare configurable limits and coordinate/attenuation
-  behavior. Selecting a scene light in the hierarchy enables **Focus light**,
+  they are enabled; the web renderers now support the same scene-light count,
+  with the opt-in sun in a separate shader slot. The web scene-light limit can
+  be lowered from 16 and is saved in the browser. Compare higher custom
+  limits and coordinate/attenuation behavior. Selecting a scene light in the hierarchy
+  enables **Focus light**,
   which recenters the camera at its world position while preserving zoom and
   orbit.
   Desktop: [variable manager](../O3DView/O3DView/VariableManager.cs),
   [GUI controller](../O3DView/O3DView/GUI/GUIController.cs);
   web: [light controls](src/app.js).
 - [ ] **Match desktop view controls.** Add remaining gizmos and
-  texture reload. Viewport-focused arrow keys now pan in camera space, matching
-  the desktop camera's arrow-key movement in both web renderers. Browser-picked
+  texture reload. Left-drag and Alt+middle-drag orbit; right/middle-drag pan;
+  left+right and middle+right drag zoom, matching desktop gestures in both
+  web renderers. Mouse pan uses the desktop's default zoom-independent
+  sensitivity. Wheel zoom matches the desktop's default factor across browser
+  delta modes. Holding viewport-focused arrow keys moves continuously in
+  camera space at the desktop's default speed, independent of zoom. F focuses
+  the selected model; Delete and Ctrl+D act on deletable/duplicable selected
+  hierarchy items.
+  Browser-picked
   files are immutable snapshots, so refreshing externally changed textures
   requires reselecting the updated files; a safe scene-preserving replacement
   flow remains open. Compare mouse and keyboard interaction and ensure both web
@@ -178,8 +202,12 @@ These features are not necessarily equivalent in all cases. See
   [view menu](../O3DView/O3DView/GUI/GUIController.cs),
   [camera](../O3DView/O3DView/Camera.cs).
 - [ ] **Extend variable and material inspection.** Match desktop variable
-  types and supported bindings beyond the current alpha, lightmap and mesh
-  visibility controls; compare defaults and value ranges. Match the desktop's
+  types and supported bindings beyond the current alpha-scale (default 1),
+  lightmap-strength (default 0), free-texture paths and mesh visibility
+  controls. Texture-coordinate offset variables are exposed as desktop-default
+  no-op floats; enhanced text-texture variables as no-op strings; and light
+  brightness variables from `[light]`, `[light_enh]`, and `[light_enh_2]` as
+  no-op floats. Compare remaining defaults and value ranges. Match the desktop's
   material and object inspector behavior without treating parser-only commands
   as rendered features. Desktop:
   [variable manager](../O3DView/O3DView/VariableManager.cs),
@@ -192,11 +220,14 @@ These features are not necessarily equivalent in all cases. See
 - [ ] **Compare material rendering and texture support on real assets.** Verify
   transparency and depth modes, map strengths, bump/environment maps, lighting
   and texture replacement visually against desktop in WebGL 2 and WebGPU.
-  Desktop-style back-face culling is available as an opt-in and affects
-  viewport picking; compare winding and material behavior on real assets.
+  Desktop-style back-face culling is enabled by default for filled rendering;
+  the viewer can opt out, while viewport picking still tests both windings as
+  the desktop ray picker does. Compare winding and material behavior on real
+  assets.
   Document or address format differences where desktop actually supports them;
   the web decoder supports indexed and 15/16/24/32-bit truecolor TGA images
-  and currently documents DDS DX10/cubemaps/volumes as unsupported. Compare
+  and DX10 BC1/2/3 2D textures. Other DX10 formats, arrays, cubemaps and
+  volumes remain unsupported. Compare
   TGA palette depths and alpha behavior against representative desktop-loaded
   assets. Desktop:
   [fragment shader](../O3DView/O3DView/Shaders/main_frag.glsl),

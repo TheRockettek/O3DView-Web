@@ -1,5 +1,5 @@
-// The desktop viewer defaults to 16 lights, including its sun.
-export const MAX_INTERIOR_LIGHTS = 15;
+// O3DView's desktop default renders up to 16 scene lights.
+export const MAX_INTERIOR_LIGHTS = 16;
 
 export function duplicateLight(source, lights) {
   if (!source || typeof source !== "object" || !Array.isArray(lights))
@@ -24,8 +24,13 @@ export function duplicateLight(source, lights) {
   };
 }
 
-export function encodeInteriorLights(lights) {
+export function encodeInteriorLights(lights, limit = MAX_INTERIOR_LIGHTS) {
   if (!Array.isArray(lights)) throw new TypeError("Lights must be an array");
+  if (!Number.isInteger(limit) || limit < 0 || limit > MAX_INTERIOR_LIGHTS) {
+    throw new RangeError(
+      `Light limit must be an integer from 0 to ${MAX_INTERIOR_LIGHTS}`,
+    );
+  }
   const positions = new Float32Array(MAX_INTERIOR_LIGHTS * 4);
   const colors = new Float32Array(MAX_INTERIOR_LIGHTS * 4);
   const ambients = new Float32Array(MAX_INTERIOR_LIGHTS * 4);
@@ -66,7 +71,7 @@ export function encodeInteriorLights(lights) {
     const length = direction && Math.hypot(...direction);
     if (direction && !length)
       throw new TypeError(`Invalid direction for light at index ${i}`);
-    if (i < MAX_INTERIOR_LIGHTS) {
+    if (i < limit) {
       positions.set(
         [
           ...(direction

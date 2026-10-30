@@ -1,9 +1,12 @@
 import { createRenderer } from "./renderer-selection.js";
 import { loadScene } from "./scene.js";
+import { parseO3D } from "./o3d.js";
 import { decodeConfiguration, listCommands } from "./config-inspector.js";
 import {
   collectSceneVariables,
+  initializeSceneVariableDefaults,
   updateSceneVariable,
+  updateSceneStringVariable,
 } from "./scene-variables.js";
 import {
   changeViewpoint,
@@ -31,9 +34,14 @@ import { generatePlacedSplineGeometry } from "./spline-edit.js";
 import {
   CABIN_MARKER_TRIANGLE_COUNT,
   CABIN_PATH_LINK_TRIANGLE_COUNT,
+  cabinMarkerIcon,
+  cabinMarkerExportModel,
   cabinPathPointWorldPosition,
   updateCabinMarkerPosition,
+  updateCabinSeatProperties,
+  updateCabinSeatPreview,
   updateCabinPathPoint,
+  updateCabinPathReference,
   updateCabinPathLink,
 } from "./cabin-path.js";
 import { focusModels, focusPosition } from "./camera-controls.js";
@@ -60,9 +68,11 @@ const fullbright = byId("fullbright");
 const highlightSelection = byId("highlight-selection");
 const wireframe = byId("wireframe");
 const cullBackfaces = byId("cull-backfaces");
+const sceneLightLimitInput = byId("scene-light-limit");
 const showGizmos = byId("show-gizmos");
 const showLightReferences = byId("show-light-references");
 const lightReferenceLayer = byId("light-reference-layer");
+const cabinMarkerLayer = byId("cabin-marker-layer");
 const sceneList = byId("scene-list");
 const viewpointSelect = byId("viewpoint");
 const configFile = byId("config-file");
@@ -79,6 +89,9 @@ let loading = false;
 let sceneModels = [];
 let sceneLoaded = false;
 let sceneHierarchy = [];
+let cabinMarkerReferences = [];
+let lightReferenceMarkers = [];
+let lightReferenceLines = [];
 let selectedCabinItem = null;
 let selectedSceneGroup = null;
 let selectedExportGroup = null;
@@ -87,9 +100,32 @@ let selectedModel = null;
 let lastPick = null;
 let sceneVisibility = [];
 let configVisibility = [];
+let cabinSeatPreviewAssets = null;
+let cabinSeatPreviewAssetsPromise = null;
+let cabinSeatPreviewRequest = 0;
 let viewpoint = 0;
 let sceneVariables = [];
+let sceneStringVariables = [];
+let sceneFloatVariables = [];
 let sceneLights = [];
+const SCENE_LIGHT_LIMIT_STORAGE_KEY = "o3dview-web-scene-light-limit";
+
+function readSceneLightLimit() {
+  try {
+    const saved = localStorage.getItem(SCENE_LIGHT_LIMIT_STORAGE_KEY);
+    if (saved === null) return MAX_INTERIOR_LIGHTS;
+    const limit = Number(saved);
+    if (Number.isInteger(limit) && limit >= 0 && limit <= MAX_INTERIOR_LIGHTS)
+      return limit;
+    console.warn("Ignoring invalid saved scene light limit", saved);
+  } catch (error) {
+    console.warn("Unable to read the saved scene light limit", error);
+  }
+  return MAX_INTERIOR_LIGHTS;
+}
+
+let sceneLightLimit = readSceneLightLimit();
+sceneLightLimitInput.value = String(sceneLightLimit);
 let sun = {
   position: [0, 0, 0],
   direction: [0, -1, 0],
@@ -151,7 +187,10 @@ function closeUnusedTextures(removedModels, retainedModels, session) {
     }
   }
   if (errors.length)
-    throw new AggregateError(errors, "Unable to release removed scene textures");
+    throw new AggregateError(
+      errors,
+      "Unable to release removed scene textures",
+    );
 }
 
 function onRendererError(event) {
@@ -290,16 +329,15 @@ function showModelMaterials() {
   byId("model-rotation").value = (
     model?.sceneTransform?.rotation ?? [0, 0, 0]
   ).join(" ");
-  byId("model-scale").value = (
-    model?.sceneTransform?.scale ?? [1, 1, 1]
-  ).join(" ");
+  byId("model-scale").value = (model?.sceneTransform?.scale ?? [1, 1, 1]).join(
+    " ",
+  );
   byId("model-source").textContent = model
     ? `Source: ${model.cabinPathSource || model.sourceName || model.name}`
     : "";
   if (canEditSpline) {
     const position = spline.position ?? { x: 0, y: 0, z: 0 };
-    byId("spline-position").value =
-      `${position.x} ${position.y} ${position.z}`;
+    byId("spline-position").value = `${position.x} ${position.y} ${position.z}`;
     byId("spline-heading").value = spline.heading ?? 0;
     byId("spline-length").value = spline.length ?? 0;
     byId("spline-radius").value = spline.radius ?? 0;
@@ -515,8 +553,7 @@ function duplicableSceneModelIndices(node) {
   if (!node) return null;
   if (node.type === "model") {
     const model = sceneModels[node.modelIndex];
-    return (
-      Number.isInteger(node.modelIndex) &&
+    return Number.isInteger(node.modelIndex) &&
       model &&
       model.gizmoVisible === undefined &&
       !model.cabinPathSource &&
@@ -524,7 +561,6 @@ function duplicableSceneModelIndices(node) {
       !model.splinePlacement &&
       !model.pathPlacement &&
       !node.children?.length
-    )
       ? [node.modelIndex]
       : null;
   }
@@ -587,17 +623,13 @@ function duplicateSceneNode(node, copies, lodCopies, root) {
 }
 
 function commitSceneDuplicate(sourceNode, duplicateNode, copies) {
-  if (
-    !renderer ||
-    renderer.error ||
-    loading ||
-    repaintApplying ||
-    !sceneLoaded
-  )
+  if (!renderer || renderer.error || loading || repaintApplying || !sceneLoaded)
     return;
   const location = findSceneNodeParent(sceneHierarchy, sourceNode);
   if (!location)
-    throw new Error("The selected hierarchy item is missing from the scene tree.");
+    throw new Error(
+      "The selected hierarchy item is missing from the scene tree.",
+    );
   const siblingIndex = location.siblings.indexOf(sourceNode);
   if (siblingIndex < 0)
     throw new Error("The selected hierarchy item is missing from its parent.");
@@ -743,7 +775,8 @@ function refreshGroupExportSelection() {
     obj = byId("export-group-obj"),
     mtl = byId("export-group-mtl");
   if (!selectedExportGroup) {
-    label.textContent = "Choose a group in the scene tree to export its models.";
+    label.textContent =
+      "Choose a group in the scene tree to export its models.";
     obj.disabled = true;
     mtl.disabled = true;
     return;
@@ -770,10 +803,14 @@ function deleteSelectedSceneNode() {
   try {
     const location = findSceneNodeParent(sceneHierarchy, node);
     if (!location)
-      throw new Error("The selected hierarchy item is missing from the scene tree.");
+      throw new Error(
+        "The selected hierarchy item is missing from the scene tree.",
+      );
     const siblingIndex = location.siblings.indexOf(node);
     if (siblingIndex < 0)
-      throw new Error("The selected hierarchy item is missing from its parent.");
+      throw new Error(
+        "The selected hierarchy item is missing from its parent.",
+      );
     const removed = new Set(modelIndices);
     const previousModels = sceneModels.slice();
     const previousVisibility = sceneVisibility.slice();
@@ -791,7 +828,11 @@ function deleteSelectedSceneNode() {
       (_visible, index) => !removed.has(index),
     );
     const nextModelIndices = new Map();
-    for (let oldIndex = 0, newIndex = 0; oldIndex < previousModels.length; oldIndex++)
+    for (
+      let oldIndex = 0, newIndex = 0;
+      oldIndex < previousModels.length;
+      oldIndex++
+    )
       if (!removed.has(oldIndex)) nextModelIndices.set(oldIndex, newIndex++);
     let firstRemovedIndex = Infinity;
     for (const index of modelIndices)
@@ -981,6 +1022,9 @@ byId("duplicate-model").addEventListener("click", duplicateSelectedModel);
 byId("duplicate-group").addEventListener("click", duplicateSelectedGroup);
 
 function selectModel(index) {
+  if (sceneModels[index]?.cabinSeatPreview?.item !== selectedCabinItem?.info) {
+    clearCabinSeatPreview();
+  }
   try {
     renderer.setSelectedModel(index);
     selectedModel = index;
@@ -1005,14 +1049,14 @@ function lightLabel(light, index) {
   const label = light.created
     ? `${light.name} (created)`
     : `${light.name || light.variable || "(unnamed)"} — ${light.source}:${light.line}${placementLabel(light.mapPlacement)}`;
-  return label + (index >= MAX_INTERIOR_LIGHTS ? " (over light limit)" : "");
+  return label + (index >= sceneLightLimit ? " (over light limit)" : "");
 }
 
 function setLightEnabled(index, on) {
   const next = sceneLights.map((value, i) =>
     i === index ? { ...value, on } : value,
   );
-  renderer.setLights(next);
+  renderer.setLights(next, sceneLightLimit);
   sceneLights.splice(0, sceneLights.length, ...next);
   showLights();
   showSceneList();
@@ -1042,8 +1086,10 @@ function showLights() {
     list.append(item);
   }
   byId("light-summary").textContent = sceneLights.length
-    ? `${sceneLights.length} light${sceneLights.length === 1 ? "" : "s"}; first ${MAX_INTERIOR_LIGHTS} supported.`
+    ? `${sceneLights.length} light${sceneLights.length === 1 ? "" : "s"}; first ${sceneLightLimit} of ${MAX_INTERIOR_LIGHTS} rendered.`
     : "No lights.";
+  sceneLightLimitInput.value = String(sceneLightLimit);
+  sceneLightLimitInput.disabled = !sceneLoaded || !!renderer?.error;
   byId("create-light").disabled = !sceneLoaded || !!renderer?.error;
   byId("create-point-light").disabled = !sceneLoaded || !!renderer?.error;
   byId("desktop-sun").disabled = !sceneLoaded || !!renderer?.error;
@@ -1068,6 +1114,8 @@ function showLights() {
 
 function renderLightReferences() {
   lightReferenceLayer.replaceChildren();
+  lightReferenceMarkers = [];
+  lightReferenceLines = [];
   lightReferenceLayer.hidden =
     !showLightReferences.checked ||
     !sceneLights.length ||
@@ -1092,17 +1140,213 @@ function renderLightReferences() {
       }
     });
     lightReferenceLayer.append(marker);
+    lightReferenceMarkers.push(marker);
   }
+  renderSelectedLightReferenceLines();
   updateLightReferencePositions();
 }
 
-function updateLightReferencePositions() {
-  if (lightReferenceLayer.hidden || !renderer || renderer.error) return;
-  for (const marker of lightReferenceLayer.children) {
-    const light = sceneLights[Number(marker.dataset.lightIndex)];
-    const position = light
-      ? projectWorldPosition(renderer, light.position)
+function renderSelectedLightReferenceLines() {
+  lightReferenceLayer.replaceChildren(...lightReferenceMarkers);
+  lightReferenceLines = [];
+  const node = selectedSceneGroup;
+  const info =
+    node?.type === "cabin-item" && selectedCabinItem === node
+      ? node.info
       : null;
+  const model = node?.type === "model" ? sceneModels[node.modelIndex] : null;
+  const isSeat = ["passpos", "drivpos"].includes(info?.kind);
+  const references = isSeat
+    ? info.illuminationInterior
+    : model?.illuminationInterior;
+  if (
+    lightReferenceLayer.hidden ||
+    !renderer ||
+    renderer.error ||
+    (!isSeat && !model) ||
+    !Array.isArray(references) ||
+    (isSeat && (!Array.isArray(info.position) || info.position.length !== 3))
+  )
+    return;
+  const placement = isSeat
+    ? (info.pathState?.placement ??
+      info.mapPlacement ??
+      sceneModels[info.markerModelIndex]?.mapPlacement)
+    : null;
+  for (const lightIndex of references) {
+    if (
+      !Number.isInteger(lightIndex) ||
+      lightIndex < 0 ||
+      lightIndex >= sceneLights.length
+    )
+      continue;
+    const line = document.createElement("span");
+    line.className = "light-reference-line";
+    line.ariaHidden = "true";
+    line.dataset.lightIndex = String(lightIndex);
+    lightReferenceLayer.append(line);
+    lightReferenceLines.push({
+      element: line,
+      info: isSeat ? info : null,
+      model: isSeat ? null : model,
+      lightIndex,
+      placement,
+    });
+  }
+  updateLightReferenceLinePositions();
+}
+
+function renderCabinMarkerReferences() {
+  cabinMarkerLayer.replaceChildren();
+  cabinMarkerReferences = [];
+  cabinMarkerLayer.hidden =
+    !showGizmos.checked || !renderer || !!renderer.error;
+  if (cabinMarkerLayer.hidden) return;
+
+  const appendReferences = (nodes) => {
+    for (const node of nodes) {
+      if (node.type === "cabin-item") {
+        const info = node.info;
+        const modelIndex = Number.isInteger(info?.markerModelIndex)
+          ? info.markerModelIndex
+          : info?.pathState?.modelIndex;
+        const icon = cabinMarkerIcon(info?.kind);
+        const model = sceneModels[modelIndex];
+        if (
+          icon &&
+          Array.isArray(info?.position) &&
+          Number.isInteger(modelIndex) &&
+          model &&
+          isModelVisible(
+            model,
+            sceneVisibility[modelIndex],
+            configVisibility[modelIndex],
+            viewpoint,
+          )
+        ) {
+          const markerIndex =
+            cabinMarkerReferences.push({
+              info,
+              modelIndex,
+              node,
+            }) - 1;
+          const marker = document.createElement("button");
+          marker.type = "button";
+          marker.className = "cabin-marker-reference";
+          marker.title = `Inspect ${node.name}`;
+          marker.ariaLabel = `Select ${node.name} in the viewport`;
+          marker.dataset.markerIndex = String(markerIndex);
+          marker.addEventListener("click", () => {
+            try {
+              selectCabinItemNode(node);
+            } catch (error) {
+              console.error("Unable to select cabin marker", error);
+              status.textContent = `Unable to select cabin marker: ${error.message}`;
+            }
+          });
+          const image = document.createElement("img");
+          image.alt = "";
+          image.draggable = false;
+          image.src = new URL(
+            `../O3DView/O3DView/Resources/${icon}`,
+            import.meta.url,
+          ).href;
+          image.addEventListener("error", () => {
+            console.error(`Unable to load cabin marker icon: ${icon}`);
+            status.textContent = `Unable to load cabin marker icon: ${icon}`;
+          });
+          marker.append(image);
+          cabinMarkerLayer.append(marker);
+        }
+      }
+      appendReferences(node.children || []);
+    }
+  };
+  appendReferences(sceneHierarchy);
+  cabinMarkerLayer.hidden = !cabinMarkerLayer.children.length;
+  updateCabinMarkerReferencePositions();
+}
+
+function updateLightReferencePositions() {
+  if (!renderer || renderer.error) return;
+  if (!lightReferenceLayer.hidden) {
+    for (const marker of lightReferenceMarkers) {
+      const light = sceneLights[Number(marker.dataset.lightIndex)];
+      const position = light
+        ? projectWorldPosition(renderer, light.position)
+        : null;
+      marker.hidden = !position;
+      if (position) {
+        marker.style.left = `${position.x}px`;
+        marker.style.top = `${position.y}px`;
+      }
+    }
+  }
+  updateLightReferenceLinePositions();
+  updateCabinMarkerReferencePositions();
+}
+
+function updateLightReferenceLinePositions() {
+  if (!renderer || renderer.error) return;
+  for (const reference of lightReferenceLines) {
+    const model = reference.model;
+    const pivot = model
+      ? (model.sceneTransform?.pivot ??
+        cabinPathPointWorldPosition([0, 0, 0], model.mapPlacement))
+      : null;
+    const translation = model?.worldTranslation ?? [0, 0, 0];
+    const origin = reference.info
+      ? cabinPathPointWorldPosition(
+          reference.info.position,
+          reference.placement,
+        )
+      : pivot.map((value, index) => value + translation[index]);
+    const start = projectWorldPosition(renderer, origin);
+    const light = sceneLights[reference.lightIndex];
+    const end = light ? projectWorldPosition(renderer, light.position) : null;
+    const line = reference.element;
+    line.hidden = lightReferenceLayer.hidden || !start || !end;
+    if (!line.hidden) {
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      line.style.left = `${start.x}px`;
+      line.style.top = `${start.y}px`;
+      line.style.width = `${Math.hypot(dx, dy)}px`;
+      line.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+    }
+  }
+}
+
+function updateCabinMarkerReferencePositions() {
+  if (cabinMarkerLayer.hidden || !renderer || renderer.error) return;
+  for (const marker of cabinMarkerLayer.children) {
+    const reference = cabinMarkerReferences[Number(marker.dataset.markerIndex)];
+    const model = sceneModels[reference?.modelIndex];
+    const { info } = reference || {};
+    const visible =
+      model &&
+      isModelVisible(
+        model,
+        sceneVisibility[reference.modelIndex],
+        configVisibility[reference.modelIndex],
+        viewpoint,
+      ) &&
+      model.cabinSeatPreview?.item !== info;
+    const markerPosition = info?.position?.slice();
+    if (markerPosition && info.kind === "entry") markerPosition[0] -= 0.12;
+    if (markerPosition && info.kind === "exit") markerPosition[0] += 0.12;
+    const position =
+      visible && markerPosition
+        ? projectWorldPosition(
+            renderer,
+            cabinPathPointWorldPosition(
+              markerPosition,
+              info.pathState?.placement ??
+                info.mapPlacement ??
+                model.mapPlacement,
+            ),
+          )
+        : null;
     marker.hidden = !position;
     if (position) {
       marker.style.left = `${position.x}px`;
@@ -1174,7 +1418,7 @@ function createLight(mode) {
     on: true,
   };
   try {
-    renderer.setLights([...sceneLights, light]);
+    renderer.setLights([...sceneLights, light], sceneLightLimit);
     sceneLights.push(light);
     sceneHierarchy.push({
       type: "light",
@@ -1188,8 +1432,8 @@ function createLight(mode) {
     syncDropdown(byId("light-select"));
     showLightInspector();
     status.textContent =
-      sceneLights.length > MAX_INTERIOR_LIGHTS
-        ? `${title} created but not rendered: only the first ${MAX_INTERIOR_LIGHTS} lights are supported.`
+      sceneLights.length > sceneLightLimit
+        ? `${title} created but not rendered: the current limit is ${sceneLightLimit} scene lights.`
         : `${title} created for this scene. Source files are unchanged.`;
   } catch (error) {
     console.error(`Unable to create ${title.toLowerCase()}`, error);
@@ -1214,7 +1458,8 @@ function findSceneLightNode(index, nodes = sceneHierarchy) {
 
 function selectSceneLight(index) {
   const node = findSceneLightNode(index);
-  if (!node) throw new Error("The selected light is missing from the scene tree.");
+  if (!node)
+    throw new Error("The selected light is missing from the scene tree.");
   const select = byId("light-select");
   select.value = String(index);
   syncDropdown(select);
@@ -1236,7 +1481,7 @@ byId("duplicate-light").addEventListener("click", () => {
     if (!sourceNode || !location)
       throw new Error("The selected light is missing from the scene tree.");
     const duplicate = duplicateLight(source, sceneLights);
-    renderer.setLights([...sceneLights, duplicate]);
+    renderer.setLights([...sceneLights, duplicate], sceneLightLimit);
     sceneLights.push(duplicate);
     const duplicateIndex = sceneLights.length - 1;
     const duplicateNode = {
@@ -1258,8 +1503,8 @@ byId("duplicate-light").addEventListener("click", () => {
     showSceneGroupInspector();
     showSceneList();
     status.textContent =
-      duplicateIndex >= MAX_INTERIOR_LIGHTS
-        ? `Light duplicated but not rendered: only the first ${MAX_INTERIOR_LIGHTS} lights are supported.`
+      duplicateIndex >= sceneLightLimit
+        ? `Light duplicated but not rendered: the current limit is ${sceneLightLimit} scene lights.`
         : "Light duplicated for this scene. Source files are unchanged.";
   } catch (error) {
     console.error("Unable to duplicate light", error);
@@ -1298,6 +1543,41 @@ byId("light-select").addEventListener("change", () => {
   showSceneList();
 });
 byId("light-mode").addEventListener("change", showLightMode);
+sceneLightLimitInput.addEventListener("change", () => {
+  const previous = sceneLightLimit;
+  const text = sceneLightLimitInput.value.trim();
+  const next = Number(text);
+  try {
+    if (
+      !text ||
+      !Number.isInteger(next) ||
+      next < 0 ||
+      next > MAX_INTERIOR_LIGHTS
+    ) {
+      throw new RangeError(
+        `Enter an integer light limit from 0 to ${MAX_INTERIOR_LIGHTS}.`,
+      );
+    }
+    if (!renderer || renderer.error || !sceneLoaded)
+      throw new Error("Load a scene before changing its light limit.");
+    renderer.setLights(sceneLights, next);
+    sceneLightLimit = next;
+    showLights();
+    showSceneList();
+    try {
+      localStorage.setItem(SCENE_LIGHT_LIMIT_STORAGE_KEY, String(next));
+    } catch (error) {
+      console.warn("Unable to save the scene light limit", error);
+      status.textContent = `Scene light limit applied but could not be saved: ${error.message}`;
+      return;
+    }
+    status.textContent = `Rendering the first ${next} scene light${next === 1 ? "" : "s"}.`;
+  } catch (error) {
+    sceneLightLimitInput.value = String(previous);
+    console.error("Unable to change scene light limit", error);
+    status.textContent = `Unable to change scene light limit: ${error.message}`;
+  }
+});
 function removeHierarchyLight(nodes, index) {
   for (let i = nodes.length - 1; i >= 0; i--) {
     const node = nodes[i];
@@ -1316,7 +1596,7 @@ byId("delete-light").addEventListener("click", () => {
   try {
     const removedNode = findSceneLightNode(index);
     const next = sceneLights.filter((_light, i) => i !== index);
-    renderer.setLights(next);
+    renderer.setLights(next, sceneLightLimit);
     sceneLights.splice(0, sceneLights.length, ...next);
     removeHierarchyLight(sceneHierarchy, index);
     if (selectedSceneGroup === removedNode) {
@@ -1362,7 +1642,7 @@ byId("light-form").addEventListener("submit", (event) => {
     if (name !== (light.name || light.variable || "(unnamed)"))
       updated.name = name;
     const next = sceneLights.map((value, i) => (i === index ? updated : value));
-    renderer.setLights(next);
+    renderer.setLights(next, sceneLightLimit);
     sceneLights.splice(0, sceneLights.length, ...next);
     showLights();
     showSceneList();
@@ -1650,6 +1930,8 @@ function showVariables(models, preserveValues = false) {
   sceneVariables = collectSceneVariables(
     models,
     byId("bind-light-variables").checked ? sceneLights : [],
+    sceneStringVariables,
+    sceneFloatVariables,
   );
   if (preserveValues) {
     for (const variable of sceneVariables)
@@ -1680,31 +1962,51 @@ byId("bind-light-variables").addEventListener("change", () =>
 function showVariable() {
   const variable = sceneVariables[Number(byId("variable-select").value)];
   const input = byId("variable-value");
+  input.type = variable?.stringType ? "text" : "number";
+  input.required = !variable?.stringType || !!variable.freeTextureRules?.length;
   input.disabled = !variable || !!renderer?.error;
   byId("variable-apply").disabled = !variable || !!renderer?.error;
   input.value = variable?.value ?? "";
-  input.min = variable?.bindings.length ? "0" : "";
-  input.max = variable?.bindings.length ? "1" : "";
-  byId("variable-hint").textContent = variable?.bindings.length
-    ? "Material-bound values range from 0 to 1."
-    : "Enter a finite 32-bit floating-point value.";
+  input.min = !variable?.stringType && variable?.bindings.length ? "0" : "";
+  input.max = !variable?.stringType && variable?.bindings.length ? "1" : "";
+  input.step = variable?.stringType ? "" : "any";
+  byId("variable-hint").textContent = variable?.stringType
+    ? variable.freeTextureRules?.length
+      ? "Enter a texture path relative to the configuration file, from selected files."
+      : "Enter a string value. Dynamic text textures are not generated by this viewer."
+    : variable?.bindings.length
+      ? "Material-bound values range from 0 to 1."
+      : "Enter a finite 32-bit floating-point value.";
 }
 
 byId("variable-select").addEventListener("change", showVariable);
-byId("variable-form").addEventListener("submit", (event) => {
+byId("variable-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const variable = sceneVariables[Number(byId("variable-select").value)];
   if (!renderer || !variable) return;
   try {
     const input = byId("variable-value");
-    if (!input.value.trim()) throw new Error("Enter a variable value.");
-    updateSceneVariable(renderer, variable, Number(input.value), {
-      models: sceneModels,
-      manualVisibility: sceneVisibility,
-      configVisibility,
-      viewpoint,
-      lights: sceneLights,
-    });
+    if (
+      !input.value.trim() &&
+      (!variable.stringType || variable.freeTextureRules?.length)
+    )
+      throw new Error("Enter a variable value.");
+    if (variable.stringType) {
+      await updateSceneStringVariable(
+        renderer,
+        variable,
+        input.value,
+        (source, name) => repaintSession.loadTexture(source, name),
+      );
+    } else {
+      updateSceneVariable(renderer, variable, Number(input.value), {
+        models: sceneModels,
+        manualVisibility: sceneVisibility,
+        configVisibility,
+        viewpoint,
+        lights: sceneLights,
+      });
+    }
     showMaterial();
     showSceneList();
     showLightInspector();
@@ -1989,9 +2291,7 @@ function showSceneList() {
       select.disabled = !!renderer?.error;
       select.addEventListener("click", () => {
         selectSceneLight(index);
-        sceneList
-          .querySelector?.(`[data-light-index="${index}"]`)
-          ?.focus();
+        sceneList.querySelector?.(`[data-light-index="${index}"]`)?.focus();
         byId("light-position").focus?.();
       });
       item.append(label, select);
@@ -2036,6 +2336,7 @@ function showSceneList() {
         );
         sceneVisibility[index] = toggle.checked;
         updateDescription();
+        updateCabinMarkerReferencePositions();
       } catch (error) {
         toggle.checked = sceneVisibility[index];
         status.textContent = `Unable to change visibility: ${error.message}`;
@@ -2063,6 +2364,7 @@ function showSceneList() {
   }
   for (const node of sceneHierarchy)
     renderNode(node, sceneList, sceneHierarchy);
+  renderCabinMarkerReferences();
 }
 
 function cabinPathLinkFocusPosition(info) {
@@ -2083,14 +2385,13 @@ function cabinPathLinkFocusPosition(info) {
     end.length !== 3
   )
     return null;
-  const midpoint = start.map(
-    (value, index) => value / 2 + end[index] / 2,
-  );
+  const midpoint = start.map((value, index) => value / 2 + end[index] / 2);
   return cabinPathPointWorldPosition(midpoint, info.pathState.placement);
 }
 
 function showSceneGroupInspector() {
   const node = selectedSceneGroup;
+  renderSelectedLightReferenceLines();
   const isLeaf = [
     "model",
     "spline",
@@ -2151,8 +2452,7 @@ function showSceneGroupInspector() {
   parentSelect.value =
     currentParent === null ? "root" : String(currentParent.parentKey);
   syncDropdown(parentSelect);
-  byId("scene-group-parent-fields").disabled =
-    !node || !!renderer?.error;
+  byId("scene-group-parent-fields").disabled = !node || !!renderer?.error;
   byId("scene-group-lod-form").hidden = node?.type !== "lod";
   byId("scene-group-lod-fields").disabled =
     node?.type !== "lod" || !!renderer?.error;
@@ -2178,8 +2478,9 @@ function showSceneGroupInspector() {
     node?.type === "cabin-item" && node.info?.kind === "path link"
       ? cabinPathLinkFocusPosition(node.info)
       : null;
-  const model =
-    Number.isInteger(node?.modelIndex) ? sceneModels[node.modelIndex] : null;
+  const model = Number.isInteger(node?.modelIndex)
+    ? sceneModels[node.modelIndex]
+    : null;
   byId("focus-scene-group").disabled =
     !node ||
     !!renderer?.error ||
@@ -2188,13 +2489,12 @@ function showSceneGroupInspector() {
       !cabinPoint &&
       !cabinItemPosition &&
       !cabinPathLinkPosition);
-  byId("focus-scene-group").textContent =
-    Number.isInteger(node?.modelIndex)
-      ? "Focus model"
-      : node?.type === "light"
-        ? "Focus light"
-        : node?.type === "sun"
-          ? "Focus sun"
+  byId("focus-scene-group").textContent = Number.isInteger(node?.modelIndex)
+    ? "Focus model"
+    : node?.type === "light"
+      ? "Focus light"
+      : node?.type === "sun"
+        ? "Focus sun"
         : cabinPoint
           ? "Focus cabin point"
           : cabinPathLinkPosition
@@ -2204,13 +2504,12 @@ function showSceneGroupInspector() {
               : "Focus group";
   byId("scene-group-parent-form").querySelector(
     'button[type="submit"]',
-  ).textContent =
-    Number.isInteger(node?.modelIndex)
-      ? "Move model"
-      : node?.type === "light"
-        ? "Move light"
-        : node?.type === "sun"
-          ? "Move sun"
+  ).textContent = Number.isInteger(node?.modelIndex)
+    ? "Move model"
+    : node?.type === "light"
+      ? "Move light"
+      : node?.type === "sun"
+        ? "Move sun"
         : node?.type === "cabin-item"
           ? "Move cabin entry"
           : "Move group";
@@ -2231,8 +2530,28 @@ function showSceneGroupInspector() {
       details.push(`Triangles: ${model.triangles.length / 4}`);
     if (Array.isArray(model.materials))
       details.push(`Materials: ${model.materials.length}`);
-    if (model.o3dMetadata?.version !== undefined)
-      details.push(`O3D version: ${model.o3dMetadata.version}`);
+    if (Array.isArray(model.illuminationInterior))
+      details.push(
+        `Interior light references (A-D): ${model.illuminationInterior.join(" ")}`,
+      );
+    const o3d = model.o3dMetadata;
+    if (o3d?.version !== undefined) {
+      details.push(`O3D version: ${o3d.version}`);
+      if (Number.isInteger(o3d.encryptionKey))
+        details.push(
+          `Encryption key: 0x${(o3d.encryptionKey >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+        );
+      if (Number.isInteger(o3d.extendedOptions)) {
+        const optionNames = [];
+        if (o3d.extendedOptions & 1) optionNames.push("LONG_TRIANGLE_INDICES");
+        if (o3d.extendedOptions & 2) optionNames.push("ALT_ENCRYPTION_SEED");
+        const unknownOptions = o3d.extendedOptions & ~3;
+        if (unknownOptions)
+          optionNames.push(`0x${unknownOptions.toString(16).toUpperCase()}`);
+        details.push(`Extended options: ${optionNames.join(", ") || "NONE"}`);
+      }
+      if (Array.isArray(o3d.bones)) details.push(`Bones: ${o3d.bones.length}`);
+    }
   }
   if (node.type === "sun") {
     details.push(
@@ -2301,9 +2620,102 @@ function findCabinItemNode(info, nodes = sceneHierarchy) {
   return null;
 }
 
+async function loadCabinSeatPreviewAssets() {
+  if (cabinSeatPreviewAssets) return cabinSeatPreviewAssets;
+  if (!cabinSeatPreviewAssetsPromise) {
+    const resources = [
+      ["standing", "../O3DView/O3DView/Resources/player_standing.o3d"],
+      ["sitting", "../O3DView/O3DView/Resources/player_sitting.o3d"],
+    ];
+    cabinSeatPreviewAssetsPromise = Promise.all(
+      resources.map(async ([kind, path]) => {
+        const response = await fetch(new URL(path, import.meta.url));
+        if (!response.ok)
+          throw new Error(
+            `Seat preview ${kind} asset request failed (${response.status})`,
+          );
+        return [kind, parseO3D(await response.arrayBuffer())];
+      }),
+    )
+      .then((entries) => {
+        cabinSeatPreviewAssets = Object.fromEntries(entries);
+        return cabinSeatPreviewAssets;
+      })
+      .catch((error) => {
+        cabinSeatPreviewAssetsPromise = null;
+        throw error;
+      });
+  }
+  return cabinSeatPreviewAssetsPromise;
+}
+
+function clearCabinSeatPreview() {
+  cabinSeatPreviewRequest += 1;
+  if (!renderer || renderer.error) return;
+  for (const model of sceneModels) {
+    if (!model.cabinSeatPreview) continue;
+    try {
+      updateCabinSeatPreview(
+        model,
+        null,
+        null,
+        renderer,
+        sceneModels,
+        sceneVisibility,
+        configVisibility,
+        viewpoint,
+        selectedModel,
+      );
+    } catch (error) {
+      console.error("Unable to clear cabin seat preview", error);
+      status.textContent = `Unable to clear cabin seat preview: ${error.message}`;
+    }
+  }
+  updateCabinMarkerReferencePositions();
+}
+
+async function showCabinSeatPreview(node) {
+  const info = node.info;
+  const model = sceneModels[info.markerModelIndex];
+  if (!model) return;
+  const request = ++cabinSeatPreviewRequest;
+  try {
+    const assets = await loadCabinSeatPreviewAssets();
+    if (
+      request !== cabinSeatPreviewRequest ||
+      selectedCabinItem !== node ||
+      !sceneModels.includes(model)
+    ) {
+      return;
+    }
+    updateCabinSeatPreview(
+      model,
+      info,
+      assets,
+      renderer,
+      sceneModels,
+      sceneVisibility,
+      configVisibility,
+      viewpoint,
+      selectedModel,
+    );
+    updateCabinMarkerReferencePositions();
+  } catch (error) {
+    console.error("Unable to show cabin seat preview", error);
+    status.textContent = `Unable to show cabin seat preview: ${error.message}`;
+  }
+}
+
 function selectCabinItemNode(node) {
+  const isSeat = ["passpos", "drivpos"].includes(node.info?.kind);
+  const existingPreview = sceneModels.find(
+    (model) => model.cabinSeatPreview,
+  )?.cabinSeatPreview;
+  const alreadyPreviewed = isSeat && existingPreview?.item === node.info;
+  if (!alreadyPreviewed) clearCabinSeatPreview();
   selectedCabinItem = node;
   selectedSceneGroup = node;
+  if (isSeat && !alreadyPreviewed) void showCabinSeatPreview(node);
   showCabinInspector();
   showSceneGroupInspector();
   showSceneList();
@@ -2354,16 +2766,14 @@ byId("scene-group-parent-form").addEventListener("submit", (event) => {
     }
     showSceneGroupInspector();
     showSceneList();
-    const type =
-      Number.isInteger(node.modelIndex)
-        ? "Model"
-        : node.type === "light"
-          ? "Light"
-          : node.type === "cabin-item"
-            ? "Cabin entry"
-            : "Group";
-    status.textContent =
-      `${type} moved in the scene hierarchy. Source files and model transforms are unchanged.`;
+    const type = Number.isInteger(node.modelIndex)
+      ? "Model"
+      : node.type === "light"
+        ? "Light"
+        : node.type === "cabin-item"
+          ? "Cabin entry"
+          : "Group";
+    status.textContent = `${type} moved in the scene hierarchy. Source files and model transforms are unchanged.`;
   } catch (error) {
     const errors = [error];
     if (move) {
@@ -2452,8 +2862,7 @@ byId("focus-scene-group").addEventListener("click", () => {
       if (!position)
         throw new Error("The selected cabin path link has no valid endpoints.");
       focusPosition(renderer, position);
-      status.textContent =
-        "Centered the view on the selected cabin path link.";
+      status.textContent = "Centered the view on the selected cabin path link.";
     } else {
       focusModels(renderer, descendantModels(selectedSceneGroup));
       status.textContent =
@@ -2495,15 +2904,32 @@ function showCabinInspector() {
   const hasItem = selectedCabinItem?.type === "cabin-item";
   const editable = info?.kind === "path point" && !!info.pathState;
   const editableLink = info?.kind === "path link" && !!info.pathState;
+  const editablePathReference =
+    Number.isSafeInteger(info?.pathPoint) && !!info.pathState;
+  const editableEntryOptions = info?.kind === "entry";
+  const editableMetadata = Array.isArray(info?.variation);
+  const editableParent = editableMetadata && Object.hasOwn(info, "parent");
   const editablePosition = Number.isInteger(info?.markerModelIndex);
   const editableSeat =
     ["passpos", "drivpos"].includes(info?.kind) &&
     Number.isFinite(info.height) &&
     Number.isFinite(info.rotation);
+  const editableSeatLights = ["passpos", "drivpos"].includes(info?.kind);
   byId("cabin-item-name-form").hidden = !hasItem;
   byId("cabin-item-name-fields").disabled = !hasItem || !!renderer?.error;
   byId("cabin-point-form").hidden = !editable;
   byId("cabin-point-fields").disabled = !editable || !!renderer?.error;
+  byId("cabin-reference-form").hidden = !editablePathReference;
+  byId("cabin-reference-fields").disabled =
+    !editablePathReference || !!renderer?.error;
+  byId("cabin-entry-options-form").hidden = !editableEntryOptions;
+  byId("cabin-entry-options-fields").disabled =
+    !editableEntryOptions || !!renderer?.error;
+  byId("cabin-metadata-form").hidden = !editableMetadata;
+  byId("cabin-metadata-fields").disabled =
+    !editableMetadata || !!renderer?.error;
+  byId("cabin-parent-label").hidden = !editableParent;
+  byId("cabin-parent").hidden = !editableParent;
   byId("cabin-link-form").hidden = !editableLink;
   byId("cabin-link-fields").disabled = !editableLink || !!renderer?.error;
   byId("cabin-item-position-form").hidden = !editablePosition;
@@ -2511,6 +2937,9 @@ function showCabinInspector() {
     !editablePosition || !!renderer?.error;
   byId("cabin-seat-form").hidden = !editableSeat;
   byId("cabin-seat-fields").disabled = !editableSeat || !!renderer?.error;
+  byId("cabin-seat-lights-form").hidden = !editableSeatLights;
+  byId("cabin-seat-lights-fields").disabled =
+    !editableSeatLights || !!renderer?.error;
   if (!info) {
     byId("cabin-info").textContent = "No cabin item selected.";
     return;
@@ -2529,8 +2958,18 @@ function showCabinInspector() {
     rows.push(`OMSI position (X Y Z): ${info.position.join(" ")}`);
   if (info.height !== undefined) rows.push(`Height: ${info.height}`);
   if (info.rotation !== undefined) rows.push(`Rotation: ${info.rotation}`);
+  if (Array.isArray(info.illuminationInterior))
+    rows.push(
+      `Interior light references (A-D): ${info.illuminationInterior.join(" ")}`,
+    );
   if (info.variation) rows.push(`Variation: ${info.variation.join(" ")}`);
   if (info.parent !== undefined) rows.push(`Parent: ${info.parent}`);
+  if (info.kind === "entry") {
+    rows.push(
+      `No ticket sale: ${info.noTicketSale ? "yes" : "no"}`,
+      `Requires button: ${info.withButton ? "yes" : "no"}`,
+    );
+  }
   if (info.link) {
     rows.push(
       `Endpoints: ${info.link.a} ${info.link.b}`,
@@ -2542,12 +2981,28 @@ function showCabinInspector() {
   byId("cabin-info").textContent = rows.join("\n");
   if (hasItem) byId("cabin-item-name").value = selectedCabinItem.name;
   if (editable) byId("cabin-point-position").value = info.position.join(" ");
+  if (editablePathReference)
+    byId("cabin-reference-point").value = String(info.pathPoint);
+  if (editableEntryOptions) {
+    byId("cabin-entry-no-ticket-sale").checked = !!info.noTicketSale;
+    byId("cabin-entry-with-button").checked = !!info.withButton;
+  }
+  if (editableMetadata) {
+    byId("cabin-variation").value = info.variation.join(" ");
+    if (editableParent) byId("cabin-parent").value = info.parent;
+  }
   if (editablePosition)
     byId("cabin-item-position").value = info.position.join(" ");
   if (editableSeat) {
     byId("cabin-seat-height").value = String(info.height);
     byId("cabin-seat-rotation").value = String(info.rotation);
   }
+  if (editableSeatLights)
+    byId("cabin-seat-light-references").value = Array.isArray(
+      info.illuminationInterior,
+    )
+      ? info.illuminationInterior.join(" ")
+      : "";
   if (editableLink) {
     byId("cabin-link-a").value = String(info.link.a);
     byId("cabin-link-b").value = String(info.link.b);
@@ -2645,6 +3100,79 @@ byId("cabin-point-form").addEventListener("submit", (event) => {
   }
 });
 
+byId("cabin-reference-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const info = selectedCabinItem?.info;
+  if (!info?.pathState || !renderer || renderer.error) return;
+  try {
+    const text = byId("cabin-reference-point").value.trim();
+    const pathPoint = Number(text);
+    if (!text || !Number.isSafeInteger(pathPoint))
+      throw new Error("Enter a non-negative integer path-point index.");
+    const warnings = updateCabinPathReference(
+      info.pathState,
+      info,
+      pathPoint,
+      renderer,
+      sceneModels,
+      sceneVisibility,
+      configVisibility,
+      viewpoint,
+      selectedModel,
+    );
+    lastPick = null;
+    showCabinInspector();
+    showSceneGroupInspector();
+    showSceneList();
+    status.textContent = `Cabin path reference updated for this scene. Source files are unchanged.${warnings.length ? ` ${warnings.join(" ")}` : ""}`;
+  } catch (error) {
+    console.error("Unable to update cabin path reference", error);
+    status.textContent = `Unable to update cabin path reference: ${error.message}`;
+  }
+});
+
+byId("cabin-entry-options-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const info = selectedCabinItem?.info;
+  if (info?.kind !== "entry" || !renderer || renderer.error) return;
+  try {
+    info.noTicketSale = byId("cabin-entry-no-ticket-sale").checked;
+    info.withButton = byId("cabin-entry-with-button").checked;
+    showCabinInspector();
+    showSceneList();
+    status.textContent =
+      "Cabin entry options updated for this scene. Source files are unchanged.";
+  } catch (error) {
+    console.error("Unable to update cabin entry options", error);
+    status.textContent = `Unable to update cabin entry options: ${error.message}`;
+  }
+});
+
+byId("cabin-metadata-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const info = selectedCabinItem?.info;
+  if (!Array.isArray(info?.variation) || !renderer || renderer.error) return;
+  try {
+    const variation = parseVector(
+      byId("cabin-variation").value,
+      2,
+      "Variation",
+    );
+    if (!variation.every((value) => Number.isFinite(Math.fround(value))))
+      throw new Error("Variation values must fit in 32-bit floats.");
+    info.variation = variation.map(Math.fround);
+    if (Object.hasOwn(info, "parent")) info.parent = byId("cabin-parent").value;
+    showCabinInspector();
+    showSceneGroupInspector();
+    showSceneList();
+    status.textContent =
+      "Cabin metadata updated for this scene. Source files are unchanged.";
+  } catch (error) {
+    console.error("Unable to update cabin metadata", error);
+    status.textContent = `Unable to update cabin metadata: ${error.message}`;
+  }
+});
+
 byId("cabin-seat-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const info = selectedCabinItem?.info;
@@ -2668,14 +3196,66 @@ byId("cabin-seat-form").addEventListener("submit", (event) => {
       !Number.isFinite(Math.fround(rotation))
     )
       throw new Error("Enter finite 32-bit height and rotation values.");
-    info.height = Math.fround(height);
-    info.rotation = Math.fround(rotation);
+    if (Number.isInteger(info.markerModelIndex)) {
+      const markerModel = sceneModels[info.markerModelIndex];
+      if (!markerModel) throw new Error("Cabin marker model is missing.");
+      updateCabinSeatProperties(
+        markerModel,
+        info,
+        height,
+        rotation,
+        renderer,
+        sceneModels,
+        sceneVisibility,
+        configVisibility,
+        viewpoint,
+        selectedModel,
+      );
+    } else {
+      info.height = Math.fround(height);
+      info.rotation = Math.fround(rotation);
+    }
+    lastPick = null;
     showCabinInspector();
     status.textContent =
       "Seat properties updated for this scene. Source files are unchanged.";
   } catch (error) {
     console.error("Unable to update cabin seat properties", error);
     status.textContent = `Unable to update seat properties: ${error.message}`;
+  }
+});
+
+byId("cabin-seat-lights-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const info = selectedCabinItem?.info;
+  if (
+    !["passpos", "drivpos"].includes(info?.kind) ||
+    !renderer ||
+    renderer.error
+  )
+    return;
+  try {
+    const text = byId("cabin-seat-light-references").value.trim();
+    if (!text) {
+      delete info.illuminationInterior;
+    } else {
+      const references = parseVector(text, 4, "Interior light references");
+      if (
+        references.some((index) => !Number.isSafeInteger(index) || index < -1)
+      )
+        throw new Error(
+          "Light indices must be integers greater than or equal to -1.",
+        );
+      info.illuminationInterior = references;
+    }
+    showCabinInspector();
+    showSceneList();
+    renderSelectedLightReferenceLines();
+    status.textContent =
+      "Seat light references updated for this scene. Source files are unchanged.";
+  } catch (error) {
+    console.error("Unable to update seat light references", error);
+    status.textContent = `Unable to update seat light references: ${error.message}`;
   }
 });
 
@@ -2825,7 +3405,10 @@ byId("export-o3d").addEventListener("click", () => {
   const model = sceneModels[Number(materialModel.value)];
   if (!model) return;
   try {
-    const name = downloadO3D(model, byId("export-o3d-format").value);
+    const name = downloadO3D(
+      cabinMarkerExportModel(model),
+      byId("export-o3d-format").value,
+    );
     status.textContent = `Downloaded ${name}. Source files are unchanged.`;
   } catch (error) {
     console.error("Unable to export O3D", error);
@@ -2838,7 +3421,7 @@ for (const format of ["obj", "mtl"]) {
     try {
       const model = sceneModels[Number(materialModel.value)];
       if (!model) throw new Error("Select a scene model first.");
-      const name = downloadWavefront(model, format);
+      const name = downloadWavefront(cabinMarkerExportModel(model), format);
       status.textContent = `Download started: ${name}. Download both files and provide any referenced textures separately.`;
     } catch (error) {
       console.error("Unable to export model", error);
@@ -2847,7 +3430,10 @@ for (const format of ["obj", "mtl"]) {
   });
   byId(`export-scene-${format}`).addEventListener("click", () => {
     try {
-      const name = downloadWavefront(combineSceneModels(sceneModels), format);
+      const name = downloadWavefront(
+        combineSceneModels(sceneModels.map(cabinMarkerExportModel)),
+        format,
+      );
       status.textContent = `Download started: ${name}. Download both scene files and provide any referenced textures separately.`;
     } catch (error) {
       console.error("Unable to export scene", error);
@@ -2858,7 +3444,10 @@ for (const format of ["obj", "mtl"]) {
     try {
       if (!selectedExportGroup) throw new Error("Select a scene group first.");
       const name = downloadWavefront(
-        combineSceneModels(descendantModels(selectedExportGroup), "group.obj"),
+        combineSceneModels(
+          descendantModels(selectedExportGroup).map(cabinMarkerExportModel),
+          "group.obj",
+        ),
         format,
       );
       status.textContent = `Download started: ${name}. Download both group files and provide any referenced textures separately.`;
@@ -3032,19 +3621,59 @@ function focusSelectedModel() {
 }
 focusButton.addEventListener("click", focusSelectedModel);
 document.addEventListener("keydown", (event) => {
+  const key = event.key.toLowerCase();
   if (
-    event.key.toLowerCase() !== "f" ||
-    event.ctrlKey ||
-    event.altKey ||
-    event.metaKey ||
-    event.shiftKey ||
+    event.target === canvas &&
+    ["arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)
+  )
+    updateLightReferencePositions();
+  if (
     event.repeat ||
     (event.target !== document.body && event.target !== canvas)
   )
     return;
-  if (!focusButton.disabled) {
+  if (
+    key === "f" &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    !focusButton.disabled
+  ) {
     event.preventDefault();
     focusSelectedModel();
+    return;
+  }
+  let action = null;
+  if (
+    key === "delete" &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.shiftKey
+  ) {
+    action =
+      selectedSceneGroup?.type === "light"
+        ? byId("delete-light")
+        : byId("delete-scene-node");
+  } else if (
+    key === "d" &&
+    event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.shiftKey
+  ) {
+    action =
+      selectedSceneGroup?.type === "light"
+        ? byId("duplicate-light")
+        : selectedSceneGroup?.modelIndex !== undefined || !selectedSceneGroup
+          ? byId("duplicate-model")
+          : byId("duplicate-group");
+  }
+  if (action && !action.disabled) {
+    event.preventDefault();
+    action.click();
+    canvas.focus({ preventScroll: true });
   }
 });
 fullbright.addEventListener("change", () => {
@@ -3123,9 +3752,9 @@ open.addEventListener("click", async () => {
       result.repaintGroups,
       result.repaintTextures,
     );
-    if (result.lights.length > MAX_INTERIOR_LIGHTS) {
+    if (result.lights.length > sceneLightLimit) {
       result.warnings.push(
-        `Only the first ${MAX_INTERIOR_LIGHTS} interior lights are rendered (desktop default: 16 lights including the sun).`,
+        `Only the first ${sceneLightLimit} scene lights are rendered (maximum: ${MAX_INTERIOR_LIGHTS}).`,
       );
     }
     showWarnings(result.warnings);
@@ -3141,8 +3770,16 @@ open.addEventListener("click", async () => {
       for (const material of model.materials)
         material.nightmapStrength = globalNightStrength;
     }
+    sceneVisibility = result.models.map(() => true);
+    configVisibility = initializeSceneVariableDefaults(
+      result.models,
+      byId("bind-light-variables").checked ? result.lights : [],
+    );
+    viewpoint = 0;
     renderer.setModels(result.models);
     renderer.setSelectedModel(result.models.length ? 0 : null);
+    for (const [index, visible] of configVisibility.entries())
+      if (!visible) renderer.setModelVisible(index, false);
     if (!showGizmos.checked) {
       changeGizmoVisibility(
         renderer,
@@ -3153,7 +3790,7 @@ open.addEventListener("click", async () => {
         false,
       );
     }
-    renderer.setLights(result.lights);
+    renderer.setLights(result.lights, sceneLightLimit);
     repaintSession?.dispose();
     repaintSession = newRepaint;
     closeTextures(sceneModels);
@@ -3181,6 +3818,8 @@ open.addEventListener("click", async () => {
     byId("export-group-obj").disabled = true;
     byId("export-group-mtl").disabled = true;
     sceneLights = result.lights;
+    sceneStringVariables = result.stringVariables;
+    sceneFloatVariables = result.floatVariables;
     repaintApplying = false;
     lastPick = null;
     byId("bind-light-variables").disabled =
@@ -3190,9 +3829,6 @@ open.addEventListener("click", async () => {
     showLights();
     sceneLods = result.lods;
     adopted = true;
-    sceneVisibility = result.models.map(() => true);
-    configVisibility = result.models.map(() => true);
-    viewpoint = 0;
     viewpointSelect.value = "0";
     syncDropdown(viewpointSelect);
     viewpointSelect.disabled =
@@ -3337,28 +3973,54 @@ try {
       if (index !== null) {
         selectModel(index);
         if (event.altKey && selectContainingSceneGroup(index)) return;
-        const markerItems = sceneModels[index]?.cabinMarkerItems;
+        const model = sceneModels[index];
+        const markerItems = model?.cabinMarkerItems;
         if (Array.isArray(markerItems)) {
-          const itemIndex = Math.floor(
-            hit.triangleIndex / CABIN_MARKER_TRIANGLE_COUNT,
-          );
-          const item = markerItems[itemIndex];
+          const previewStart = model.cabinSeatPreviewTriangleStart;
+          const previewItem = model.cabinSeatPreview?.item;
+          const item =
+            previewItem &&
+            Number.isInteger(previewStart) &&
+            hit.triangleIndex >= previewStart
+              ? previewItem
+              : markerItems[
+                  Math.floor(hit.triangleIndex / CABIN_MARKER_TRIANGLE_COUNT)
+                ];
           const node = item && findCabinItemNode(item);
           if (node) selectCabinItemNode(node);
         } else {
-          const model = sceneModels[index];
           const pointItems = model?.cabinPathPointItems;
           const markerStart = model?.cabinPathPointMarkerTriangleStart;
-          const markerOffset = hit.triangleIndex - markerStart;
+          const pointEnd =
+            markerStart +
+            (pointItems?.length ?? 0) * CABIN_MARKER_TRIANGLE_COUNT;
+          const specialItems = model?.cabinPathSpecialMarkerItems;
+          const specialStart = model?.cabinPathSpecialMarkerTriangleStart;
+          const specialEnd =
+            specialStart +
+            (specialItems?.length ?? 0) * CABIN_MARKER_TRIANGLE_COUNT;
           if (
             Array.isArray(pointItems) &&
             Number.isInteger(markerStart) &&
-            markerOffset >= 0
+            hit.triangleIndex >= markerStart &&
+            hit.triangleIndex < pointEnd
           ) {
             const pointIndex = Math.floor(
-              markerOffset / CABIN_MARKER_TRIANGLE_COUNT,
+              (hit.triangleIndex - markerStart) / CABIN_MARKER_TRIANGLE_COUNT,
             );
             const item = pointItems[pointIndex];
+            const node = item && findCabinItemNode(item);
+            if (node) selectCabinItemNode(node);
+          } else if (
+            Array.isArray(specialItems) &&
+            Number.isInteger(specialStart) &&
+            hit.triangleIndex >= specialStart &&
+            hit.triangleIndex < specialEnd
+          ) {
+            const itemIndex = Math.floor(
+              (hit.triangleIndex - specialStart) / CABIN_MARKER_TRIANGLE_COUNT,
+            );
+            const item = specialItems[itemIndex];
             const node = item && findCabinItemNode(item);
             if (node) selectCabinItemNode(node);
           } else if (

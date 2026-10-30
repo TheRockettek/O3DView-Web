@@ -157,9 +157,7 @@ export function createRepaintSession(models, groups, textures) {
     const removed = new Set(indices);
     if (
       removed.size !== indices.length ||
-      [...removed].some(
-        (index) => !Number.isInteger(index) || !models[index],
-      )
+      [...removed].some((index) => !Number.isInteger(index) || !models[index])
     )
       throw new RangeError("Invalid removed repaint model");
     if (!removed.size) return;
@@ -240,6 +238,11 @@ export function createRepaintSession(models, groups, textures) {
     get ctis() {
       return [...ctis.values()];
     },
+    loadTexture(source, name) {
+      if (typeof textures?.load !== "function")
+        throw new Error("Scene texture loading is unavailable");
+      return textures.load(source, name);
+    },
     includeDuplicates,
     includeDuplicate,
     removeModels,
@@ -301,8 +304,9 @@ export function createRepaintSession(models, groups, textures) {
                 const variable = variables.find(
                   (candidate) => candidate.name === setvar.name,
                 );
-                if (variable) variableUpdates.set(variable, setvar.value);
-                else
+                if (variable && !variable.stringType)
+                  variableUpdates.set(variable, setvar.value);
+                else if (!variable)
                   warnings.add(
                     `${cti.source}: repaint variable "${setvar.name}" is not available`,
                   );

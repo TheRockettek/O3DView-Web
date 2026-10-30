@@ -1,5 +1,6 @@
-// Decode the first mip level of a legacy, two-dimensional DDS texture to RGBA.
+// Decode the first mip level of a 2D DDS texture to RGBA.
 const HEADER_SIZE = 128;
+const DX10_HEADER_SIZE = 20;
 const MAX_PIXELS = 64 * 1024 * 1024;
 const DDSD_PITCH = 0x8;
 const DDSD_LINEARSIZE = 0x80000;
@@ -36,12 +37,12 @@ function rgb565(value) {
   ];
 }
 
-function decodeBlocks(view, data, width, height, format) {
+function decodeBlocks(view, data, width, height, format, dataOffset, srgb) {
   const blockSize = format === "DXT1" ? 8 : 16;
   const explicitAlpha = format === "DXT2" || format === "DXT3";
   const interpolatedAlpha = format === "DXT4" || format === "DXT5";
   const premultiplied = format === "DXT2" || format === "DXT4";
-  let offset = HEADER_SIZE;
+  let offset = dataOffset;
   for (let by = 0; by < Math.ceil(height / 4); by++) {
     for (let bx = 0; bx < Math.ceil(width / 4); bx++, offset += blockSize) {
       const colorOffset = offset + (format === "DXT1" ? 0 : 8);
@@ -101,11 +102,21 @@ function decodeBlocks(view, data, width, height, format) {
             ? alphas[Number((alphaIndices >> BigInt(3 * i)) & 7n)]
             : color[3];
         for (let c = 0; c < 3; c++) {
-          data[dst + c] = premultiplied
+          const value = premultiplied
             ? alpha
               ? Math.min(255, Math.round((color[c] * 255) / alpha))
               : 0
             : color[c];
+          if (srgb) {
+            const normalized = value / 255;
+            const linear =
+              normalized <= 0.04045
+                ? normalized / 12.92
+                : ((normalized + 0.055) / 1.055) ** 2.4;
+            data[dst + c] = Math.round(linear * 255);
+          } else {
+            data[dst + c] = value;
+          }
         }
         data[dst + 3] = alpha;
       }
@@ -114,9 +125,10 @@ function decodeBlocks(view, data, width, height, format) {
 }
 
 /**
- * Decode a legacy 2D DDS ArrayBuffer into top-down, straight-alpha RGBA pixels.
- * Only the first mip level is read. Cubemaps, volumes, DX10 and other formats
- * are deliberately rejected; lower mip levels, if present, are not validated.
+ * Decode a 2D DDS ArrayBuffer into top-down, straight-alpha RGBA pixels.
+ * Supports legacy formats and DX10 BC1/2/3. Only the first mip level is read.
+ * Cubemaps, volumes, arrays and other DX10 formats are rejected; lower mip
+ * levels, if present, are not validated.
  * A zero compressed linear size is treated as unspecified, as in some OMSI
  * textures; the actual top-level payload is still checked before decoding.
  * A8 uses black RGB, matching the desktop reader's GL_ALPHA8 texture mapping.
@@ -151,6 +163,8 @@ export function decodeDDS(buffer) {
     throw new Error("Unsupported or contradictory DDS pixel format flags");
   }
   let format,
+    srgb = false,
+    dataOffset = HEADER_SIZE,
     stride,
     components,
     bytesPerPixel,
@@ -164,7 +178,32 @@ export function decodeDDS(buffer) {
       (fourCC >>> 16) & 255,
       fourCC >>> 24,
     );
-    if (!["DXT1", "DXT2", "DXT3", "DXT4", "DXT5"].includes(format)) {
+    if (format === "DX10") {
+      dataOffset += DX10_HEADER_SIZE;
+      if (buffer.byteLength < dataOffset)
+        throw new Error("Truncated DDS DX10 header");
+      const dxgiFormat = u32(128);
+      const resourceDimension = u32(132);
+      const miscFlag = u32(136);
+      const arraySize = u32(140);
+      if (resourceDimension !== 3 || miscFlag & 0x4 || arraySize !== 1)
+        throw new Error("Unsupported DDS DX10 texture type");
+      const dx10Formats = {
+        70: ["DXT1", false],
+        71: ["DXT1", false],
+        72: ["DXT1", true],
+        73: ["DXT3", false],
+        74: ["DXT3", false],
+        75: ["DXT3", true],
+        76: ["DXT5", false],
+        77: ["DXT5", false],
+        78: ["DXT5", true],
+      };
+      const decodedFormat = dx10Formats[dxgiFormat];
+      if (!decodedFormat)
+        throw new Error(`Unsupported DDS DXGI format ${dxgiFormat}`);
+      [format, srgb] = decodedFormat;
+    } else if (!["DXT1", "DXT2", "DXT3", "DXT4", "DXT5"].includes(format)) {
       throw new Error(`Unsupported DDS FourCC ${JSON.stringify(format)}`);
     }
     required =
@@ -209,11 +248,11 @@ export function decodeDDS(buffer) {
   } else {
     throw new Error("Unsupported DDS pixel format");
   }
-  if (required > buffer.byteLength - HEADER_SIZE)
+  if (required > buffer.byteLength - dataOffset)
     throw new Error("Truncated DDS pixel data");
   const data = new Uint8ClampedArray(width * height * 4);
   if (format) {
-    decodeBlocks(view, data, width, height, format);
+    decodeBlocks(view, data, width, height, format, dataOffset, srgb);
   } else {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {

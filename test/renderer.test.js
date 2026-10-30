@@ -2,6 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Renderer } from "../src/renderer.js";
 
+test("WebGPU defaults to desktop back-face culling", () => {
+  const renderer = new Renderer({}, { queue: { writeBuffer() {} } });
+  assert.equal(renderer._cullBackfaces, true);
+});
+
 test("updating a material changes the matching GPU uniform without resetting the camera", () => {
   const writes = [];
   const renderer = new Renderer(
@@ -289,16 +294,16 @@ test("WebGPU uploads interior lights in the camera uniform", () => {
   ]);
   renderer._render();
   const data = writes[0][2];
-  assert.equal(data.length, 216);
+  assert.equal(data.length, 228);
   assert.deepEqual([...data.slice(20, 24)], [1, 2, 3, 4]);
   assert.deepEqual([...data.slice(24, 28)], [0, -1, 0, 4]);
-  assert.deepEqual([...data.slice(80, 88)], [0.5, 1, 2, 1, 1, 1, 1, 2]);
-  assert.ok([...data.slice(88, 140)].every((value) => value === 0));
-  assert.deepEqual([...data.slice(140, 144)], [0.5, 1, 2, 0]);
-  assert.ok([...data.slice(144, 200)].every((value) => value === 0));
-  assert.ok(data[200] >= 0 && data[200] <= 1);
-  assert.equal(data[201], 0);
-  assert.ok([...data.slice(204)].every((value) => value === 0));
+  assert.deepEqual([...data.slice(84, 92)], [0.5, 1, 2, 1, 1, 1, 1, 2]);
+  assert.ok([...data.slice(92, 148)].every((value) => value === 0));
+  assert.deepEqual([...data.slice(148, 152)], [0.5, 1, 2, 0]);
+  assert.ok([...data.slice(156, 212)].every((value) => value === 0));
+  assert.ok(data[212] >= 0 && data[212] <= 1);
+  assert.equal(data[213], 0);
+  assert.ok([...data.slice(216)].every((value) => value === 0));
   renderer.setSun({
     position: [0, 0, 0],
     range: 1000,
@@ -311,10 +316,10 @@ test("WebGPU uploads interior lights in the camera uniform", () => {
   });
   renderer._render();
   const sun = writes.at(-1)[2];
-  assert.equal(sun[201], 1);
-  assert.deepEqual([...sun.slice(204, 208)], [0, -1, 0, 1000]);
-  assert.deepEqual([...sun.slice(208, 212)], [2, 1, 0, 2]);
-  assert.deepEqual([...sun.slice(212, 216)], [0.5, 0, 0, 0]);
+  assert.equal(sun[213], 1);
+  assert.deepEqual([...sun.slice(216, 220)], [0, -1, 0, 1000]);
+  assert.deepEqual([...sun.slice(220, 224)], [2, 1, 0, 2]);
+  assert.deepEqual([...sun.slice(224, 228)], [0.5, 0, 0, 0]);
 });
 
 test("WebGPU selection updates per-model uniforms and rolls back failed writes", () => {
