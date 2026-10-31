@@ -138,8 +138,11 @@ These features are not necessarily equivalent in all cases. See
   from their path points so both remain visible. Direct-position markers are
   color-coded by record type. Positioned seats, stampers, and ticket-sale points
   also show the corresponding desktop icon at their projected position; the
-  underlying meshes remain for picking. These fixed-size screen overlays do not
-  depth-occlude like the desktop billboards.
+  underlying meshes remain for picking. Icon size follows the desktop
+  billboards' 0.1-world-unit extent in perspective; browser button hit areas
+  remain fixed for usability. Icons are hidden when a visible scene triangle
+  occludes their center point; this CPU approximation ignores texture alpha and
+  special depth modes.
   Viewport picks on passenger-cabin and path-point markers select the
   associated cabin record; path-strip hits select their corresponding link.
   Positioned cabin items can be focused at their placed world positions.
@@ -152,8 +155,9 @@ These features are not necessarily equivalent in all cases. See
   for the current scene. Ticket-point variation and parent fields, entry
   ticket/button options, and seat interior-light references are also editable.
   Selected CFG meshes and seats with interior-light references draw lines to
-  those lights when the light-reference overlay is enabled; other cabin record
-  metadata remains read-only.
+  those lights when the light-reference overlay is enabled, with sampled depth
+  occlusion against visible scene geometry; other cabin record metadata remains
+  read-only.
   Remaining cabin gizmos, broader editing and real-asset comparison remain.
   Desktop: [loader](../O3DView/O3DView/FileLoader.cs),
   [inspector](../O3DView/O3DView/GUI/InspectorWindow.cs).
@@ -188,7 +192,8 @@ These features are not necessarily equivalent in all cases. See
   sensitivity. Wheel zoom matches the desktop's default factor across browser
   delta modes. Holding viewport-focused arrow keys moves continuously in
   camera space at the desktop's default speed, independent of zoom. F focuses
-  the selected model; Delete and Ctrl+D act on deletable/duplicable selected
+  the selected hierarchy item or material-inspector model; Ctrl+O opens the
+  file chooser; Delete and Ctrl+D act on deletable/duplicable selected
   hierarchy items.
   Browser-picked
   files are immutable snapshots, so refreshing externally changed textures
@@ -228,8 +233,8 @@ These features are not necessarily equivalent in all cases. See
   the web decoder supports indexed and 15/16/24/32-bit truecolor TGA images
   and DX10 BC1/2/3 2D textures. Other DX10 formats, arrays, cubemaps and
   volumes remain unsupported. Compare
-  TGA palette depths and alpha behavior against representative desktop-loaded
-  assets. Desktop:
+  Synthetic tests now cover 15/16/24/32-bit indexed palettes; compare palette
+  alpha behavior against representative desktop-loaded assets. Desktop:
   [fragment shader](../O3DView/O3DView/Shaders/main_frag.glsl),
   [texture manager](../O3DView/O3DView/TextureManager.cs);
   web: [renderer](src/renderer.js), [WebGL renderer](src/webgl-renderer.js).

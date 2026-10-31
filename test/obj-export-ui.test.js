@@ -66,6 +66,7 @@ class Element {
     return this.listeners[type]?.({
       target: this,
       preventDefault() {},
+      stopPropagation() {},
       ...extra,
     });
   }
@@ -283,6 +284,11 @@ test("scene selection and applied material edits reach export; failures appear i
     dispose() {},
   };
   const sunUpdates = [];
+  let hideReferenceSamples = false;
+  const projectPoint = (_renderer, position) => ({
+    x: 30 + position[0] * 100,
+    y: 40 + position[2] * 100,
+  });
   const renderer = {
     _target: [0, 0, 0],
     _distance: 10,
@@ -389,7 +395,9 @@ test("scene selection and applied material edits reach export; failures appear i
           : { index: 1, triangleIndex: 0 })
       );
     },
-    projectWorldPosition: () => ({ x: 30, y: 40 }),
+    projectWorldPosition: projectPoint,
+    projectVisibleWorldPosition: (activeRenderer, _models, position) =>
+      hideReferenceSamples ? null : projectPoint(activeRenderer, position),
     translateSceneModel: (_renderer, models, index, translation) => {
       models[index].worldTranslation = translation;
     },
@@ -439,10 +447,43 @@ test("scene selection and applied material edits reach export; failures appear i
       .replaceAll("import.meta.url", JSON.stringify(appUrl));
     assert.doesNotMatch(source, /^import\s/m);
     const prefix =
-      "const { createRenderer, loadScene, parseO3D, decodeConfiguration, listCommands, collectSceneVariables, initializeSceneVariableDefaults, updateSceneVariable, changeViewpoint, changeLodVisibility, changeGizmoVisibility, bindSceneVisibilityGroups, isModelVisible, viewpointAllows, captureDrop, readDroppedFiles, downloadWavefront, downloadO3D, combineSceneModels, MAX_INTERIOR_LIGHTS, duplicateLight, canContainSceneNode, containsSceneNode, deletableSceneModelIndices, findSceneNodeParent, moveSceneNode, reparentSceneNode, restoreSceneNodeParent, CABIN_MARKER_TRIANGLE_COUNT, CABIN_PATH_LINK_TRIANGLE_COUNT, cabinMarkerIcon, cabinMarkerExportModel, updateNightStrength, createRepaintSession, enhanceDropdowns, syncDropdown, pickModelHit, projectWorldPosition, translateSceneModel, updateCabinPathPoint, updateCabinPathReference, updateCabinPathLink, updateCabinMarkerPosition, updateCabinSeatProperties, updateCabinSeatPreview, focusModels, focusPosition, cabinPathPointWorldPosition } = globalThis.__appTestDeps;\n";
+      "const { createRenderer, loadScene, parseO3D, decodeConfiguration, listCommands, collectSceneVariables, initializeSceneVariableDefaults, updateSceneVariable, changeViewpoint, changeLodVisibility, changeGizmoVisibility, bindSceneVisibilityGroups, isModelVisible, viewpointAllows, captureDrop, readDroppedFiles, downloadWavefront, downloadO3D, combineSceneModels, MAX_INTERIOR_LIGHTS, duplicateLight, canContainSceneNode, containsSceneNode, deletableSceneModelIndices, findSceneNodeParent, moveSceneNode, reparentSceneNode, restoreSceneNodeParent, CABIN_MARKER_TRIANGLE_COUNT, CABIN_PATH_LINK_TRIANGLE_COUNT, cabinMarkerIcon, cabinMarkerExportModel, updateNightStrength, createRepaintSession, enhanceDropdowns, syncDropdown, pickModelHit, projectWorldPosition, projectVisibleWorldPosition, translateSceneModel, updateCabinPathPoint, updateCabinPathReference, updateCabinPathLink, updateCabinMarkerPosition, updateCabinSeatProperties, updateCabinSeatPreview, focusModels, focusPosition, cabinPathPointWorldPosition } = globalThis.__appTestDeps;\n";
     await import(
       `data:text/javascript;base64,${Buffer.from(prefix + source).toString("base64")}`
     );
+    let openShortcutCalls = 0,
+      shortcutPrevented = false;
+    get("open").click = () => openShortcutCalls++;
+    const keydown = listeners.get("keydown");
+    keydown({
+      target: document.body,
+      key: "o",
+      ctrlKey: true,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false,
+      preventDefault() {
+        shortcutPrevented = true;
+      },
+    });
+    assert.equal(openShortcutCalls, 1);
+    assert.equal(shortcutPrevented, true);
+    keydown({
+      target: get("model-name"),
+      key: "o",
+      ctrlKey: true,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false,
+      preventDefault() {
+        shortcutPrevented = false;
+      },
+    });
+    assert.equal(openShortcutCalls, 1);
+    assert.equal(shortcutPrevented, true);
+    delete get("open").click;
     assert.equal(get("export-obj").disabled, true);
     get("model-files").files = [{ name: "same.o3d" }];
     await get("model-files").emit("change");
@@ -455,6 +496,21 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.match(get("scene-group-info").textContent, /Vertices: 1/);
     assert.match(get("scene-group-info").textContent, /Triangles: 1/);
     assert.match(get("scene-group-info").textContent, /Materials: 1/);
+    let focusPrevented = false;
+    listeners.get("keydown")({
+      target: document.body,
+      key: "f",
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false,
+      preventDefault() {
+        focusPrevented = true;
+      },
+    });
+    assert.equal(focusPrevented, true);
+    assert.deepEqual(calls.shift(), { focus: 0 });
     get("show-light-references").checked = true;
     await get("show-light-references").emit("change");
     assert.equal(
@@ -463,9 +519,22 @@ test("scene selection and applied material edits reach export; failures appear i
       ).length,
       1,
     );
-    const lightReference = get("light-reference-layer").children[0];
-    assert.equal(lightReference.style.left, "30px");
-    assert.equal(lightReference.style.top, "40px");
+    let lightReferenceLine = get("light-reference-layer").children.find(
+      (child) => child.className === "light-reference-line",
+    );
+    assert.equal(lightReferenceLine.style.left, "30px");
+    assert.equal(lightReferenceLine.style.top, "40px");
+    hideReferenceSamples = true;
+    await get("show-light-references").emit("change");
+    lightReferenceLine = get("light-reference-layer").children.find(
+      (child) => child.className === "light-reference-line",
+    );
+    assert.match(lightReferenceLine.style.background, /transparent/);
+    hideReferenceSamples = false;
+    await get("show-light-references").emit("change");
+    const lightReference = get("light-reference-layer").children.find(
+      (child) => child.className === "light-reference-marker",
+    );
     await lightReference.emit("click");
     assert.match(get("scene-group-info").textContent, /Type: light/);
     assert.equal(get("light-select").value, "0");
@@ -554,6 +623,22 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.equal(get("cabin-point-form").hidden, true);
     assert.equal(get("cabin-link-form").hidden, false);
     assert.equal(get("focus-scene-group").disabled, true);
+    const focusCallsBeforeLink = calls.length;
+    let linkFocusPrevented = false;
+    listeners.get("keydown")({
+      target: document.body,
+      key: "f",
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false,
+      preventDefault() {
+        linkFocusPrevented = true;
+      },
+    });
+    assert.equal(linkFocusPrevented, false);
+    assert.equal(calls.length, focusCallsBeforeLink);
     get("cabin-link-a").value = "1";
     get("cabin-link-b").value = "2";
     get("cabin-link-oneway").checked = true;
@@ -1224,8 +1309,13 @@ test("scene selection and applied material edits reach export; failures appear i
     const cabinMarkerLayer = get("cabin-marker-layer");
     assert.equal(cabinMarkerLayer.hidden, false);
     assert.equal(cabinMarkerLayer.children.length, 5);
-    assert.equal(cabinMarkerLayer.children[0].style.left, "30px");
+    assert.equal(cabinMarkerLayer.children[0].style.left, "130px");
     assert.equal(cabinMarkerLayer.children[0].style.top, "40px");
+    assert.ok(
+      Math.abs(
+        parseFloat(cabinMarkerLayer.children[0].children[0].style.width) - 10,
+      ) < 1e-8,
+    );
     assert.equal(
       cabinMarkerLayer.children[0].children[0].src,
       new URL(
@@ -1355,6 +1445,8 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.equal(get("focus-scene-group").textContent, "Focus cabin link");
     await get("focus-scene-group").emit("click");
     assert.deepEqual(focusedPositions.at(-1), [0.5, 0, 0]);
+    sceneResult = { models, lights, lods, hierarchy, warnings: [] };
+    await get("open").emit("click");
     get("material-model").value = "0";
     await get("material-model").emit("change");
     const originalDiffuse = models[0].materials[0].diffuse;
@@ -1387,6 +1479,7 @@ test("scene selection and applied material edits reach export; failures appear i
     };
     root.children.unshift(batchGroup);
     models[1].lod = lods[0];
+    await get("material-model").emit("change");
     const findElement = (element, predicate) => {
       if (predicate(element)) return element;
       for (const child of element.children) {
@@ -1451,6 +1544,32 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.ok(batchGroupSelect);
     await batchGroupSelect.emit("click");
     assert.equal(get("delete-scene-node").disabled, false);
+    const focusGroupButton = get("focus-scene-group");
+    const previousGroupFocusCount = calls.filter(
+      (call) => "focusGroup" in call,
+    ).length;
+    focusGroupButton.click = () => focusGroupButton.emit("click");
+    let hierarchyFocusPrevented = false;
+    listeners.get("keydown")({
+      target: document.body,
+      key: "f",
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false,
+      preventDefault() {
+        hierarchyFocusPrevented = true;
+      },
+    });
+    assert.equal(hierarchyFocusPrevented, true);
+    assert.deepEqual(
+      calls.filter((call) => "focusGroup" in call).slice(
+        previousGroupFocusCount,
+      ),
+      [{ focusGroup: [models[0], models[1]] }],
+    );
+    delete focusGroupButton.click;
     failSceneDelete = true;
     await get("delete-scene-node").emit("click");
     assert.equal(models.length, 5);
@@ -1475,6 +1594,29 @@ test("scene selection and applied material edits reach export; failures appear i
     assert.ok(rootSelect);
     await rootSelect.emit("click");
     assert.equal(get("delete-scene-node").disabled, true);
+    const sunSelect = findElement(
+      get("scene-list"),
+      (element) =>
+        element.ariaLabel === "Select Desktop-style sun (opt-in)",
+    );
+    assert.ok(sunSelect);
+    await sunSelect.emit("click");
+    const focusCallsBeforeSunSelection = calls.length;
+    let sunFocusPrevented = false;
+    listeners.get("keydown")({
+      target: document.body,
+      key: "f",
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false,
+      preventDefault() {
+        sunFocusPrevented = true;
+      },
+    });
+    assert.equal(sunFocusPrevented, false);
+    assert.equal(calls.length, focusCallsBeforeSunSelection);
   } finally {
     delete globalThis.document;
     delete globalThis.window;

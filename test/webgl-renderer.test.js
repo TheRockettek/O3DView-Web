@@ -1452,7 +1452,7 @@ test("orbit, zoom, resize, render errors and context loss are handled", async ()
       clientY: 10000,
     });
     assert.equal(renderer._yaw, Math.PI / 2 + 0.5);
-    assert.equal(renderer._pitch, Math.PI / 2 - 0.001);
+    assert.equal(renderer._pitch, Math.PI / 2 - 1e-6);
     const distance = renderer._distance;
     f.listeners.get("wheel")({ deltaY: 1, deltaMode: 1, preventDefault() {} });
     assert.ok(renderer._distance > distance);

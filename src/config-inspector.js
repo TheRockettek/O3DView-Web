@@ -4,6 +4,49 @@
  * ArrayBuffer views are decoded only within their byte offset and length.
  * CRLF and CR line breaks are normalized to LF.
  */
+const WINDOWS_1252_EXTENDED = [
+  "\u20ac",
+  "\u0081",
+  "\u201a",
+  "\u0192",
+  "\u201e",
+  "\u2026",
+  "\u2020",
+  "\u2021",
+  "\u02c6",
+  "\u2030",
+  "\u0160",
+  "\u2039",
+  "\u0152",
+  "\u008d",
+  "\u017d",
+  "\u008f",
+  "\u0090",
+  "\u2018",
+  "\u2019",
+  "\u201c",
+  "\u201d",
+  "\u2022",
+  "\u2013",
+  "\u2014",
+  "\u02dc",
+  "\u2122",
+  "\u0161",
+  "\u203a",
+  "\u0153",
+  "\u009d",
+  "\u017e",
+  "\u0178",
+];
+
+function decodeWindows1252(bytes) {
+  return new TextDecoder("windows-1252")
+    .decode(bytes)
+    .replace(/[\u0080-\u009f]/g, (character) => {
+      return WINDOWS_1252_EXTENDED[character.charCodeAt(0) - 0x80];
+    });
+}
+
 export function decodeConfiguration(buffer) {
   let bytes;
   if (buffer instanceof ArrayBuffer) {
@@ -29,7 +72,7 @@ export function decodeConfiguration(buffer) {
         bytes,
       );
     } catch {
-      text = new TextDecoder("windows-1252").decode(bytes);
+      text = decodeWindows1252(bytes);
     }
   }
   return text.replace(/\r\n?/g, "\n");

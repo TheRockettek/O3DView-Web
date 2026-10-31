@@ -40,6 +40,10 @@ test("falls back to Windows-1252 for invalid UTF-8, including after a UTF-8 BOM"
   assert.deepEqual(listCommands(decodeConfiguration(bytes)), [
     { name: "€ä", line: 1 },
   ]);
+  assert.equal(
+    decodeConfiguration(Uint8Array.of(0x80, 0x82, 0x91, 0x92, 0x9f)),
+    "€‚‘’Ÿ",
+  );
   assert.equal(decodeConfiguration(Uint8Array.of(0xc3, 0x28)), "Ã(");
   assert.equal(decodeConfiguration(utf8("€ä")), "€ä");
   assert.equal(decodeConfiguration(utf8("\ufeff\ufefftext")), "\ufefftext");

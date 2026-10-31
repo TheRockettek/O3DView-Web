@@ -24,7 +24,11 @@ import { duplicateLight, MAX_INTERIOR_LIGHTS } from "./light-data.js";
 import { updateNightStrength } from "./global-materials.js";
 import { createRepaintSession } from "./repaint-session.js";
 import { enhanceDropdowns, syncDropdown } from "./dropdowns.js";
-import { pickModelHit, projectWorldPosition } from "./picking.js";
+import {
+  pickModelHit,
+  projectWorldPosition,
+  projectVisibleWorldPosition,
+} from "./picking.js";
 import {
   replaceSceneGeometry,
   transformSceneModel,
@@ -1191,6 +1195,11 @@ function renderSelectedLightReferenceLines() {
       model: isSeat ? null : model,
       lightIndex,
       placement,
+      excludedModelIndex: isSeat
+        ? (Number.isInteger(info.markerModelIndex)
+            ? info.markerModelIndex
+            : info.pathState?.modelIndex)
+        : node.modelIndex,
     });
   }
   updateLightReferenceLinePositions();
@@ -1309,10 +1318,48 @@ function updateLightReferenceLinePositions() {
     if (!line.hidden) {
       const dx = end.x - start.x;
       const dy = end.y - start.y;
+      const screenLength = Math.hypot(dx, dy);
       line.style.left = `${start.x}px`;
       line.style.top = `${start.y}px`;
-      line.style.width = `${Math.hypot(dx, dy)}px`;
+      line.style.width = `${screenLength}px`;
       line.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+      const segments = Math.min(64, Math.max(1, Math.ceil(screenLength / 12)));
+      const visibleSegments = [];
+      for (let i = 0; i < segments; i++) {
+        const t = (i + 0.5) / segments;
+        const position = origin.map(
+          (value, axis) => value + (light.position[axis] - value) * t,
+        );
+        visibleSegments.push(
+          !!projectVisibleWorldPosition(
+            renderer,
+            sceneModels,
+            position,
+            reference.excludedModelIndex,
+          ),
+        );
+      }
+      if (visibleSegments.every(Boolean)) {
+        line.style.background = "";
+        line.style.boxShadow = "";
+      } else {
+        const stops = [
+          `${visibleSegments[0] ? "#ffd27b" : "transparent"} 0%`,
+        ];
+        for (let i = 1; i < segments; i++) {
+          if (visibleSegments[i] === visibleSegments[i - 1]) continue;
+          const percent = `${(i / segments) * 100}%`;
+          stops.push(
+            `${visibleSegments[i - 1] ? "#ffd27b" : "transparent"} ${percent}`,
+            `${visibleSegments[i] ? "#ffd27b" : "transparent"} ${percent}`,
+          );
+        }
+        stops.push(
+          `${visibleSegments.at(-1) ? "#ffd27b" : "transparent"} 100%`,
+        );
+        line.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
+        line.style.boxShadow = "none";
+      }
     }
   }
 }
@@ -1335,22 +1382,45 @@ function updateCabinMarkerReferencePositions() {
     const markerPosition = info?.position?.slice();
     if (markerPosition && info.kind === "entry") markerPosition[0] -= 0.12;
     if (markerPosition && info.kind === "exit") markerPosition[0] += 0.12;
-    const position =
+    const worldPosition =
       visible && markerPosition
-        ? projectWorldPosition(
-            renderer,
-            cabinPathPointWorldPosition(
-              markerPosition,
-              info.pathState?.placement ??
-                info.mapPlacement ??
-                model.mapPlacement,
-            ),
+        ? cabinPathPointWorldPosition(
+            markerPosition,
+            info.pathState?.placement ??
+              info.mapPlacement ??
+              model.mapPlacement,
           )
         : null;
+    const position = worldPosition
+      ? projectVisibleWorldPosition(
+          renderer,
+          sceneModels,
+          worldPosition,
+          reference.modelIndex,
+        )
+      : null;
     marker.hidden = !position;
     if (position) {
       marker.style.left = `${position.x}px`;
       marker.style.top = `${position.y}px`;
+      const yaw = renderer._yaw;
+      const edgePosition = projectWorldPosition(renderer, [
+        worldPosition[0] + Math.sin(yaw) * 0.1,
+        worldPosition[1],
+        worldPosition[2] - Math.cos(yaw) * 0.1,
+      ]);
+      const image = marker.children[0];
+      if (edgePosition) {
+        const size = `${Math.hypot(
+          edgePosition.x - position.x,
+          edgePosition.y - position.y,
+        )}px`;
+        image.style.width = size;
+        image.style.height = size;
+      } else {
+        image.style.width = "";
+        image.style.height = "";
+      }
     }
   }
 }
@@ -3633,15 +3703,36 @@ document.addEventListener("keydown", (event) => {
   )
     return;
   if (
+    key === "o" &&
+    event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.shiftKey
+  ) {
+    event.preventDefault();
+    open.click();
+    return;
+  }
+  const focusSceneButton = byId("focus-scene-group");
+  const focusHierarchySelection =
+    !!selectedSceneGroup &&
+    selectedSceneGroup.type !== "sun" &&
+    selectedSceneGroup.type !== "model" &&
+    !focusSceneButton.disabled;
+  const focusMaterialModel =
+    (!selectedSceneGroup || selectedSceneGroup.type === "model") &&
+    !focusButton.disabled;
+  if (
     key === "f" &&
     !event.ctrlKey &&
     !event.altKey &&
     !event.metaKey &&
     !event.shiftKey &&
-    !focusButton.disabled
+    (focusHierarchySelection || focusMaterialModel)
   ) {
     event.preventDefault();
-    focusSelectedModel();
+    if (focusHierarchySelection) focusSceneButton.click();
+    else focusSelectedModel();
     return;
   }
   let action = null;

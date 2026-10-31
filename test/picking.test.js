@@ -4,6 +4,7 @@ import {
   pickModel,
   pickModelHit,
   projectWorldPosition,
+  projectVisibleWorldPosition,
 } from "../src/picking.js";
 import { modelBounds } from "../src/camera-controls.js";
 
@@ -99,6 +100,28 @@ test("world projection maps camera target to viewport center and excludes points
     y: 50,
   });
   assert.equal(projectWorldPosition(renderer, [0, 0, 11]), null);
+});
+
+test("projected markers are hidden by closer geometry but not by their own model", () => {
+  const wall = triangle(5),
+    models = [wall],
+    renderer = camera(models);
+  const assertCentered = (position, excludedIndex) => {
+    const projected = projectVisibleWorldPosition(
+      renderer,
+      models,
+      position,
+      excludedIndex,
+    );
+    assert.ok(projected);
+    assert.ok(Math.abs(projected.x - 100) < 1e-10);
+    assert.equal(projected.y, 50);
+  };
+  assert.equal(projectVisibleWorldPosition(renderer, models, [0, 0, 0]), null);
+  assertCentered([0, 0, 8]);
+  assertCentered([0, 0, 0], 0);
+  renderer._modelVisibility[0] = false;
+  assertCentered([0, 0, 0]);
 });
 
 test("picking uses reflected model X, camera orientation, clipping and inside bounds", () => {

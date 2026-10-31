@@ -102,7 +102,7 @@ test("scene group visibility composes with nested groups and preserves child cho
     true,
   );
   assert.deepEqual(calls.slice(1), [[1, true]]);
-}
+});
 
 test("scene group visibility rolls back renderer and group state on failure", () => {
   const group = {

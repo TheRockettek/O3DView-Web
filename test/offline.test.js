@@ -78,10 +78,10 @@ test("installation caches all real application files", async () => {
   const cached = new Set(
     state.cached.map((asset) => new URL(asset, projectRoot).href),
   );
-  const pending = [new URL("../src/app.js", import.meta.url)];
+  const modulesToVisit = [new URL("../src/app.js", import.meta.url)];
   const visited = new Set();
-  while (pending.length) {
-    const moduleUrl = pending.pop();
+  while (modulesToVisit.length) {
+    const moduleUrl = modulesToVisit.pop();
     if (visited.has(moduleUrl.href)) continue;
     visited.add(moduleUrl.href);
     const source = await readFile(moduleUrl, "utf8");
@@ -94,7 +94,7 @@ test("installation caches all real application files", async () => {
         cached.has(dependency.href),
         `${dependency.pathname} is imported but not precached`,
       );
-      pending.push(dependency);
+      modulesToVisit.push(dependency);
     }
   }
 });
@@ -108,7 +108,7 @@ test("activation only deletes old application caches", async () => {
     },
   });
   await pending;
-  assert.deepEqual(state.deleted, ["o3dview-web-v51"]);
+  assert.deepEqual(state.deleted, ["o3dview-web-v51", "o3dview-web-v52"]);
   assert.ok(state.claimed);
 });
 

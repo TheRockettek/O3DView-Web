@@ -202,6 +202,19 @@ test("decodes indexed TGA images with palette origins, alpha, and RLE", () => {
   );
   assert.deepEqual([...rgb15.data], [255, 0, 255, 255]);
 
+  const rgb24 = decodeTGA(
+    fixture({
+      type: 1,
+      depth: 8,
+      colorMapStart: 5,
+      colorMapLength: 1,
+      colorMapDepth: 24,
+      colorMap: [3, 2, 1],
+      payload: [5],
+    }),
+  );
+  assert.deepEqual([...rgb24.data], [1, 2, 3, 255]);
+
   const rle = decodeTGA(
     fixture({
       type: 9,

@@ -157,6 +157,7 @@ function transformVertices(base, rotation, scale, pivot) {
     cz = Math.cos(rz),
     zsin = Math.sin(rz);
   const output = base.slice();
+  const normalizeZero = (value) => (Object.is(value, -0) ? 0 : value);
   const rotate = (x, y, z) => {
     const x1 = x,
       y1 = y * cx - z * xsin,
@@ -173,19 +174,22 @@ function transformVertices(base, rotation, scale, pivot) {
       (worldPosition[1] - pivot[1]) * sy,
       (worldPosition[2] - pivot[2]) * sz,
     );
-    output[i] = -(pivot[0] + transformed[0]);
-    output[i + 1] = pivot[1] + transformed[1];
-    output[i + 2] = pivot[2] + transformed[2];
+    output[i] = normalizeZero(-(pivot[0] + transformed[0]));
+    output[i + 1] = normalizeZero(pivot[1] + transformed[1]);
+    output[i + 2] = normalizeZero(pivot[2] + transformed[2]);
 
     const worldNormal = [-base[i + 3] / sx, base[i + 4] / sy, base[i + 5] / sz];
     const rotatedNormal = rotate(...worldNormal);
     const magnitude = Math.hypot(...rotatedNormal);
-    output[i + 3] =
-      magnitude > 0 ? -rotatedNormal[0] / magnitude : rotatedNormal[0];
-    output[i + 4] =
-      magnitude > 0 ? rotatedNormal[1] / magnitude : rotatedNormal[1];
-    output[i + 5] =
-      magnitude > 0 ? rotatedNormal[2] / magnitude : rotatedNormal[2];
+    output[i + 3] = normalizeZero(
+      magnitude > 0 ? -rotatedNormal[0] / magnitude : rotatedNormal[0],
+    );
+    output[i + 4] = normalizeZero(
+      magnitude > 0 ? rotatedNormal[1] / magnitude : rotatedNormal[1],
+    );
+    output[i + 5] = normalizeZero(
+      magnitude > 0 ? rotatedNormal[2] / magnitude : rotatedNormal[2],
+    );
   }
   if (!output.every(Number.isFinite))
     throw new RangeError("Transformed geometry exceeds 32-bit float range");

@@ -41,12 +41,13 @@ export function pickModel(
   );
 }
 
-export function pickModelHit(
+function pickModelHitInternal(
   renderer,
   models,
   clientX,
   clientY,
   afterIndex = null,
+  excludedIndex = null,
 ) {
   renderer._assertUsable();
   const rect = renderer.canvas.getBoundingClientRect();
@@ -97,6 +98,7 @@ export function pickModelHit(
   const depthFactor = -dot(direction, back);
   const hits = [];
   for (const [index, model] of models.entries()) {
+    if (index === excludedIndex) continue;
     const bounds = renderer._modelBounds[index];
     if (!renderer._modelVisibility[index] || !bounds) continue;
     const offset = subtract(eye, bounds.center),
@@ -133,6 +135,7 @@ export function pickModelHit(
       hits.push({
         index,
         distance: closest,
+        depth: closest * depthFactor,
         triangleIndex: closestTriangleIndex,
       });
   }
@@ -147,7 +150,14 @@ export function pickModelHit(
     }
   }
   return selected
-    ? { index: selected.index, triangleIndex: selected.triangleIndex }
+    ? selected
+    : null;
+}
+
+export function pickModelHit(renderer, models, clientX, clientY, afterIndex = null) {
+  const hit = pickModelHitInternal(renderer, models, clientX, clientY, afterIndex);
+  return hit
+    ? { index: hit.index, triangleIndex: hit.triangleIndex }
     : null;
 }
 
@@ -196,4 +206,38 @@ export function projectWorldPosition(renderer, position) {
     x: ((x + 1) / 2) * rect.width,
     y: ((1 - y) / 2) * rect.height,
   };
+}
+
+export function projectVisibleWorldPosition(
+  renderer,
+  models,
+  position,
+  excludedIndex = null,
+) {
+  const projected = projectWorldPosition(renderer, position);
+  if (!projected) return null;
+  const rect = renderer.canvas.getBoundingClientRect();
+  const hit = pickModelHitInternal(
+    renderer,
+    models,
+    rect.left + projected.x,
+    rect.top + projected.y,
+    null,
+    excludedIndex,
+  );
+  if (!hit) return projected;
+  const {
+    _target: target,
+    _distance: distance,
+    _yaw: yaw,
+    _pitch: pitch,
+  } = renderer;
+  const cp = Math.cos(pitch),
+    sp = Math.sin(pitch),
+    cy = Math.cos(yaw),
+    sy = Math.sin(yaw);
+  const back = [cy * cp, sp, sy * cp];
+  const eye = target.map((value, i) => value + distance * back[i]);
+  const depth = -dot(subtract(position.slice(0, 3), eye), back);
+  return hit.depth < depth - 1e-3 ? null : projected;
 }

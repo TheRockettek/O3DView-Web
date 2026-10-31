@@ -7,7 +7,7 @@ test("WebGPU environment and emissive maps are applied once after point lighting
     new URL("../src/renderer.js", import.meta.url),
     "utf8",
   );
-  const start = source.indexOf("for (var i = 0u; i < 16u; i++) {");
+  const start = source.indexOf("for (var i = 0u; i < 17u; i++) {");
   assert.notEqual(start, -1);
   let depth = 0,
     end = -1;

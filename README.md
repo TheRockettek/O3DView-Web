@@ -42,12 +42,14 @@ and UV components; it is not general-purpose or cryptographic decryption.
 Focus the viewport and hold the arrow keys to move continuously in camera
 space at the desktop viewer's default speed, independent of zoom. The web and
 WebGL renderers use the same camera controls.
-With the page or viewport focused, **F** focuses the selected model,
+With the page or viewport focused, **Ctrl+O** opens the selected-file chooser,
+**F** focuses a selected hierarchy item with a spatial focus target, or the
+material-inspector model when no hierarchy item is selected,
 **Delete** deletes a deletable selected hierarchy item, and **Ctrl+D** duplicates
 the selected model, model-only group, or light when supported.
-**Focus selected model** (or F while the page or viewport has focus) centers
-the model selected in the material inspector, including a hidden model, without
-changing the viewing angle. Select a model in the scene list or material
+**Focus selected model** centers the model selected in the material inspector,
+including a hidden model, without changing the viewing angle. Select a model in
+the scene list or material
 inspector or by clicking its geometry in the viewport; the selected model
 receives the desktop-style animated highlight,
 which can be disabled. Fullbright bypasses directional and interior
@@ -264,7 +266,8 @@ in the hierarchy and inspector; the overlay does not change light enablement
 or rendering and is independent of the spline, path and cabin gizmo toggle.
 Selecting a CFG mesh or passenger seat with `[illumination_interior]`
 references also draws screen-space lines to its referenced lights while the
-toggle is on; these lines do not depth-occlude.
+toggle is on. The lines are sampled against visible scene geometry to hide
+occluded sections; this CPU approximation may miss very small occluders.
 CTI files discovered in a configuration's CTC directory are enabled by
 default. Additional CTIs and their textures can be selected in the Repaints
 panel; use the folder chooser when a CTI refers to nested paths. Existing
@@ -361,7 +364,10 @@ height, oriented by its rotation. The temporary preview is removed on
 deselection and excluded from exports. Positioned seats, stampers, and ticket
 points also show the corresponding desktop icon at the projected marker
 position; the existing 3D markers remain for picking. These screen-space icons
-do not depth-occlude and are not an exact match for desktop billboard sizing.
+follow the desktop billboards' 0.1-world-unit size in perspective, while their
+browser button hit areas remain fixed for usability. Icons are hidden when a
+visible scene triangle occludes their center point. This CPU approximation
+ignores texture alpha and special depth modes.
 Entry/exit and link-to-next/previous references show their desktop icons at the
 referenced cabin path point; entry and exit icons use the same slight offset as
 their generated marker meshes.

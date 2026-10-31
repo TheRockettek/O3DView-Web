@@ -1,4 +1,4 @@
-const CACHE = "o3dview-web-v65";
+const CACHE = "o3dview-web-v73";
 const ASSETS = [
   "./",
   "./index.html",
@@ -21,6 +21,7 @@ const ASSETS = [
   "./src/cfg-materials.js",
   "./src/scene-variables.js",
   "./src/scene-visibility.js",
+  "./src/scene-hierarchy.js",
   "./src/scene-transforms.js",
   "./src/camera-controls.js",
   "./src/picking.js",
@@ -32,6 +33,7 @@ const ASSETS = [
   "./src/map-tile.js",
   "./src/map-transform.js",
   "./src/spline.js",
+  "./src/spline-edit.js",
   "./src/cabin-path.js",
   "./O3DView/O3DView/Resources/player_standing.o3d",
   "./O3DView/O3DView/Resources/player_sitting.o3d",
